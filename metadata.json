@@ -1,0 +1,6 @@
+{
+  "name": "CineVerse",
+  "description": "A premium AMOLED-dark movie and anime streaming application design, fully responsive with high-fidelity ExoPlayer controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

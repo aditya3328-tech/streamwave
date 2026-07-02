@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -47,7 +48,7 @@ fun FilterPillRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        items(pills) { pill ->
+        items(pills, key = { it.first }) { pill ->
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
@@ -126,7 +127,7 @@ fun FilterCategorySection(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
-            items(options) { option ->
+            items(options, key = { it }) { option ->
                 val isSelected = option == selectedOption
                 Box(
                     modifier = Modifier
@@ -435,187 +436,20 @@ fun MoviesScreen(
                         }
                     }
                 } else {
+                    val gridState = rememberLazyGridState()
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(3),
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 90.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        items(movies) { media ->
+                        items(movies, key = { it.id }) { media ->
                             MovieCard(
                                 media = media,
                                 onClick = { onNavigateToDetails(media.id) },
                                 modifier = Modifier.testTag("movie_item_card")
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-// 2. TV Shows Filter Screen
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun TVShowsScreen(
-    viewModel: CineVerseViewModel,
-    onNavigateToDetails: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val tvShows by viewModel.tvList.collectAsState()
-    val isLoading by viewModel.isTvLoading.collectAsState()
-
-    // Persistent filters
-    val selectedGenre by viewModel.tvSelectedGenre.collectAsState()
-    val selectedCountry by viewModel.tvSelectedCountry.collectAsState()
-    val selectedYear by viewModel.tvSelectedYear.collectAsState()
-    val selectedLanguage by viewModel.tvSelectedLanguage.collectAsState()
-    val selectedSortBy by viewModel.tvSelectedSortBy.collectAsState()
-
-    // Temporary local selection states for bottom sheet
-    var tempGenre by remember { mutableStateOf(selectedGenre) }
-    var tempCountry by remember { mutableStateOf(selectedCountry) }
-    var tempYear by remember { mutableStateOf(selectedYear) }
-    var tempLanguage by remember { mutableStateOf(selectedLanguage) }
-    var tempSortBy by remember { mutableStateOf(selectedSortBy) }
-
-    // Sync temp states if globals change
-    LaunchedEffect(selectedGenre, selectedCountry, selectedYear, selectedLanguage, selectedSortBy) {
-        tempGenre = selectedGenre
-        tempCountry = selectedCountry
-        tempYear = selectedYear
-        tempLanguage = selectedLanguage
-        tempSortBy = selectedSortBy
-    }
-
-    val coroutineScope = rememberCoroutineScope()
-    val scaffoldState = rememberBottomSheetScaffoldState(
-        bottomSheetState = rememberStandardBottomSheetState(initialValue = SheetValue.PartiallyExpanded)
-    )
-
-    BottomSheetScaffold(
-        scaffoldState = scaffoldState,
-        sheetPeekHeight = 0.dp,
-        sheetContainerColor = AMOLED_BLACK,
-        sheetContentColor = Color.White,
-        modifier = modifier,
-        sheetContent = {
-            FilterBottomSheetContent(
-                title = "TV Shows",
-                availableGenres = listOf("Sci-Fi", "Action", "Drama", "All"),
-                selectedGenre = tempGenre,
-                onSelectGenre = { tempGenre = it },
-                
-                availableCountries = listOf("United States", "India", "Korea", "Nigeria", "All"),
-                selectedCountry = tempCountry,
-                onSelectCountry = { tempCountry = it },
-                
-                availableYears = listOf("2026", "2025", "2024", "2023", "All"),
-                selectedYear = tempYear,
-                onSelectYear = { tempYear = it },
-                
-                availableLanguages = listOf("English", "Hindi", "Korean", "All"),
-                selectedLanguage = tempLanguage,
-                onSelectLanguage = { tempLanguage = it },
-                
-                selectedSortBy = tempSortBy,
-                onSelectSortBy = { tempSortBy = it },
-                
-                onApply = {
-                    coroutineScope.launch { scaffoldState.bottomSheetState.partialExpand() }
-                    viewModel.applyTvFilters(tempGenre, tempCountry, tempYear, tempLanguage, tempSortBy)
-                },
-                onReset = {
-                    tempGenre = "All"
-                    tempCountry = "All"
-                    tempYear = "All"
-                    tempLanguage = "All"
-                    tempSortBy = "Popularity"
-                    coroutineScope.launch { scaffoldState.bottomSheetState.partialExpand() }
-                    viewModel.resetTvFilters()
-                }
-            )
-        }
-    ) { innerPadding ->
-        AMOLEDCanvas(modifier = Modifier.padding(innerPadding)) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-            ) {
-                // Header Title
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        "Explore TV Series",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Black
-                    )
-                }
-
-                // OTT Pill row
-                val activePills = listOf(
-                    "Genre" to selectedGenre,
-                    "Year" to selectedYear,
-                    "Country" to selectedCountry
-                )
-                FilterPillRow(
-                    pills = activePills,
-                    onPillClick = {
-                        coroutineScope.launch { scaffoldState.bottomSheetState.expand() }
-                    },
-                    onFilterClick = {
-                        coroutineScope.launch { scaffoldState.bottomSheetState.expand() }
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Custom states
-                if (isLoading) {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = CRUNCHY_ORANGE)
-                    }
-                } else if (tvShows.isEmpty()) {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                "No results found",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                "No items found matching the selected genres, country or release years. Try resetting filter chips.",
-                                color = Color.Gray,
-                                fontSize = 12.sp,
-                                textAlign = TextAlign.Center
-                            )
-                        }
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(3),
-                        modifier = Modifier.weight(1f).fillMaxWidth(),
-                        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 90.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
-                        items(tvShows) { media ->
-                            MovieCard(
-                                media = media,
-                                onClick = { onNavigateToDetails(media.id) },
-                                modifier = Modifier.testTag("tv_item_card")
                             )
                         }
                     }
@@ -756,14 +590,16 @@ fun AnimationScreen(
                         }
                     }
                 } else {
+                    val gridState = rememberLazyGridState()
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(3),
                         modifier = Modifier.weight(1f).fillMaxWidth(),
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 90.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        items(animeList) { media ->
+                        items(animeList, key = { it.id }) { media ->
                             MovieCard(
                                 media = media,
                                 onClick = { onNavigateToDetails(media.id) },

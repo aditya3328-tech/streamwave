@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,8 +52,9 @@ fun SearchScreen(
     val isSearching by viewModel.isSearching.collectAsState()
     val searchError by viewModel.searchError.collectAsState()
 
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by rememberSaveable { mutableStateOf(0) }
     val keyboardController = LocalSoftwareKeyboardController.current
+    val resultsGridState = rememberLazyGridState()
 
     // Local filtering by subjectType:
     // 1 -> Movie, 2 -> Series, 6 -> Music
@@ -286,15 +289,16 @@ fun SearchScreen(
                             }
                         }
                     } else {
-                        // Results Grid rendering
+                        // Results Grid rendering (load visible items only — no preloading).
                         LazyVerticalGrid(
+                            state = resultsGridState,
                             columns = GridCells.Fixed(3),
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 90.dp),
                             modifier = Modifier.fillMaxSize()
                         ) {
-                            items(filteredResults) { item ->
+                            items(filteredResults, key = { it.subjectId }) { item ->
                                 SearchMovieCard(
                                     media = item,
                                     onClick = { onNavigateToDetails(item.subjectId) }
@@ -329,15 +333,10 @@ fun SearchMovieCard(
                     .aspectRatio(0.7f)
                     .background(Color.DarkGray)
             ) {
-                val imageUrl = media.cover?.url ?: ""
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(imageUrl)
-                        .crossfade(true)
-                        .build(),
+                OptimizedPosterImage(
+                    data = media.cover?.url,
                     contentDescription = media.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    modifier = Modifier.fillMaxSize()
                 )
 
                 if (!media.corner.isNullOrBlank()) {

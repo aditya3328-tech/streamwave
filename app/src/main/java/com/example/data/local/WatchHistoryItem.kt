@@ -1,8 +1,10 @@
 package com.example.data.local
 
+import androidx.compose.runtime.Immutable
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 
+@Immutable
 @Entity(tableName = "watch_history")
 data class WatchHistoryItem(
     @PrimaryKey val mediaId: String,

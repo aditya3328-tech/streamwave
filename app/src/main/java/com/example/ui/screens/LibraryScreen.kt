@@ -15,6 +15,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,7 +40,7 @@ fun LibraryScreen(
     val favorites by viewModel.favorites.collectAsState()
 
     // Library Tab: 0 for Watchlist, 1 for Favorites
-    var localLibraryTab by remember { mutableStateOf(0) }
+    var localLibraryTab by rememberSaveable { mutableStateOf(0) }
 
     AMOLEDCanvas(modifier = modifier) {
         LazyColumn(
@@ -128,7 +129,7 @@ fun LibraryScreen(
                         )
                     }
                 } else {
-                    items(watchlist) { item ->
+                    items(watchlist, key = { it.mediaId }) { item ->
                         LibraryItemRow(
                             id = item.mediaId,
                             title = item.title,
@@ -155,7 +156,7 @@ fun LibraryScreen(
                         )
                     }
                 } else {
-                    items(favorites) { item ->
+                    items(favorites, key = { it.mediaId }) { item ->
                         LibraryItemRow(
                             id = item.mediaId,
                             title = item.title,
@@ -202,11 +203,12 @@ fun LibraryItemRow(
                 .clip(RoundedCornerShape(6.dp))
                 .background(DEEP_GREY)
         ) {
-            AsyncImage(
-                model = posterPath,
+            OptimizedPosterImage(
+                data = posterPath,
                 contentDescription = null,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
+                widthPx = 108,
+                heightPx = 152
             )
         }
 

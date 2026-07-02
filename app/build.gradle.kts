@@ -20,6 +20,7 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
+
   signingConfigs {
     create("release") {
       val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
@@ -86,13 +87,20 @@ dependencies {
   implementation(libs.coil.compose)
   implementation(libs.androidx.media3.exoplayer)
   implementation(libs.androidx.media3.exoplayer.hls)
+  implementation(libs.androidx.media3.datasource.okhttp)
   implementation(libs.androidx.media3.ui)
   implementation(libs.converter.moshi)
+  implementation(libs.converter.gson)
+  implementation(libs.gson)
   implementation(libs.firebase.ai)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
+  // Pin kotlin-reflect to the project's Kotlin version (2.2.10). moshi-kotlin transitively
+  // drags in kotlin-reflect:1.8.21, which cannot read @Metadata produced by the 2.2.10
+  // compiler — Moshi's reflective KotlinJsonAdapterFactory then throws ExceptionInInitializerError.
+  implementation(libs.kotlin.reflect)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)

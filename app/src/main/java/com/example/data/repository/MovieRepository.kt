@@ -1,14 +1,19 @@
 package com.example.data.repository
 
+import android.util.Log
 import com.example.data.local.*
 import com.example.data.model.*
 import com.example.data.remote.ApiService
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 
 class MovieRepository(
     private val apiService: ApiService?,
+    private val streamRepository: StreamRepository,
     private val movieDao: MovieDao
 ) {
     // Watchlist persistence
@@ -181,6 +186,7 @@ class MovieRepository(
                 android.util.Log.d("DETAIL_IMDB", imdbRating)
                 android.util.Log.d("DETAIL_TRAILER_URL", trailerUrl)
                 android.util.Log.d("DETAIL_TRAILER_COVER", trailerCover)
+                android.util.Log.d("DUBS", "Loaded ${s.dubs.size} languages")
 
                 val mappedEpisodes = mutableListOf<EpisodeSummary>()
                 d.resource?.seasons?.forEach { season ->
@@ -227,7 +233,7 @@ class MovieRepository(
                     trailerUrl = if (trailerUrl.isNotEmpty()) trailerUrl else null,
                     episodes = mappedEpisodes,
                     stars = d.stars ?: emptyList(),
-                    dubs = d.dubs ?: emptyList(),
+                    dubs = s.dubs,
                     seasons = d.resource?.seasons ?: emptyList(),
                     comments = d.postList?.items ?: emptyList(),
                     trailerVideoAddressUrl = if (trailerUrl.isNotEmpty()) trailerUrl else null,
@@ -270,9 +276,244 @@ class MovieRepository(
         }
     }
 
+    // --- Staff Detail (Person Profile) screen ---
+    // Defensive parsing: the upstream JSON field names are not guaranteed, so we probe
+    // several likely keys for each value and degrade gracefully (never crash, empty on failure).
+
+    suspend fun getStaffFilmographyPage(staffId: String, page: Int, perPage: Int = 18): StaffFilmographyPage {
+        val service = apiService ?: return StaffFilmographyPage(emptyList(), 0, false, null)
+        return try {
+            val resp = service.getStaffSubjectList(staffId, page, perPage)
+            val data = resp.asMapOrNull("data") ?: resp
+            val rawItems = data.firstList("items", "subjectList", "subjects", "list", "records")
+            val items = rawItems.mapNotNull { (it as? Map<*, *>)?.let(::parseSubjectItem) }
+                .filter { it.id.isNotBlank() }
+            val total = data.firstInt("subjectNum", "total", "totalCount", "count")
+                .let { if (it > 0) it else items.size }
+            val profile = if (page == 1) {
+                val staffMap = data.asMapOrNull("staff") ?: data.asMapOrNull("staffInfo") ?: data
+                parseStaffProfile(staffMap, staffId, total)
+            } else null
+            val pager = data.asMapOrNull("pager") ?: data.asMapOrNull("page")
+            val hasMore = data.firstBool("hasMore")
+                ?: pager?.firstBool("hasMore")
+                ?: (items.size >= perPage)
+            StaffFilmographyPage(items, total, hasMore, profile)
+        } catch (e: Exception) {
+            Log.e("STAFF_API", "Filmography page $page failed for $staffId", e)
+            StaffFilmographyPage(emptyList(), 0, false, null)
+        }
+    }
+
+    suspend fun getStaffRelatedCelebrities(staffId: String): List<RelatedCelebrity> {
+        val service = apiService ?: return emptyList()
+        return try {
+            val resp = service.getStaffRelatedList(staffId)
+            val data = resp.asMapOrNull("data") ?: resp
+            val raw = data.firstList("items", "list", "staffList", "relatedList", "staffs", "records")
+            raw.mapNotNull { (it as? Map<*, *>)?.let(::parseRelated) }
+                .filter { it.id.isNotBlank() && it.name.isNotBlank() }
+        } catch (e: Exception) {
+            Log.e("STAFF_API", "Related celebrities failed for $staffId", e)
+            emptyList()
+        }
+    }
+
+    private fun parseSubjectItem(m: Map<*, *>): MediaSummary {
+        val poster = m.firstString("poster", "posterPath", "image", "cover2")
+            .ifEmpty { m.asMapOrNull("cover")?.firstString("url") ?: "" }
+        val rating = m.firstString("imdbRatingValue", "imdbRating", "rating")
+        return MediaSummary(
+            id = m.firstString("subjectId", "id"),
+            title = m.firstString("title", "name"),
+            posterPath = poster,
+            backdropPath = poster,
+            mediaType = if (m.firstInt("subjectType") == 1) "movie" else "tv",
+            rating = rating.toDoubleOrNull() ?: 0.0,
+            year = m.firstString("releaseDate", "year").take(4),
+            genres = m.firstString("genre").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        )
+    }
+
+    private fun parseStaffProfile(m: Map<*, *>?, staffId: String, total: Int): StaffProfileInfo {
+        val avatar = (m?.firstString("avatarUrl", "avatar", "image", "profilePath") ?: "")
+            .ifEmpty { m?.asMapOrNull("cover")?.firstString("url") ?: "" }
+        return StaffProfileInfo(
+            id = staffId,
+            name = m?.firstString("name", "staffName", "title") ?: "",
+            avatarUrl = avatar,
+            roles = buildRoles(m),
+            biography = m?.firstString("description", "biography", "intro", "summary", "detail") ?: "",
+            totalTitles = total
+        )
+    }
+
+    private fun parseRelated(m: Map<*, *>): RelatedCelebrity {
+        val avatar = m.firstString("avatarUrl", "avatar", "image", "profilePath")
+            .ifEmpty { m.asMapOrNull("cover")?.firstString("url") ?: "" }
+        return RelatedCelebrity(
+            id = m.firstString("staffId", "id"),
+            name = m.firstString("name", "staffName"),
+            role = buildRoles(m).ifEmpty { "Actor" },
+            avatarUrl = avatar
+        )
+    }
+
+    private fun buildRoles(m: Map<*, *>?): String {
+        if (m == null) return ""
+        (m["departments"] as? List<*>)?.let { list ->
+            val roles = list.mapNotNull { it?.toString()?.trim() }.filter { it.isNotEmpty() }
+            if (roles.isNotEmpty()) return roles.joinToString(" • ")
+        }
+        val single = m.firstString("department", "knownFor", "role", "character", "job")
+        if (single.isNotEmpty()) return single
+        return when (m.firstInt("staffType")) {
+            1 -> "Actor"
+            2 -> "Director"
+            3 -> "Writer"
+            4 -> "Producer"
+            else -> ""
+        }
+    }
+
+    // Map probing helpers (values come back as Double / String / Map / List from the JSON converter).
+    private fun Map<*, *>.firstString(vararg keys: String): String {
+        for (k in keys) {
+            val v = this[k] ?: continue
+            val s = v.toString().trim()
+            if (s.isNotEmpty() && s != "null") return s
+        }
+        return ""
+    }
+
+    private fun Map<*, *>.firstInt(vararg keys: String): Int {
+        for (k in keys) {
+            when (val v = this[k]) {
+                is Number -> return v.toInt()
+                is String -> v.trim().toDoubleOrNull()?.let { return it.toInt() }
+                else -> {}
+            }
+        }
+        return 0
+    }
+
+    private fun Map<*, *>.firstBool(vararg keys: String): Boolean? {
+        for (k in keys) {
+            when (val v = this[k]) {
+                is Boolean -> return v
+                is String -> if (v.equals("true", true)) return true else if (v.equals("false", true)) return false
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    private fun Map<*, *>.asMapOrNull(key: String): Map<*, *>? = this[key] as? Map<*, *>
+
+    private fun Map<*, *>.firstList(vararg keys: String): List<*> {
+        for (k in keys) {
+            (this[k] as? List<*>)?.let { return it }
+        }
+        // Sometimes the list is nested one level deeper, e.g. data.subjectList.items
+        for (k in keys) {
+            val nested = this[k] as? Map<*, *> ?: continue
+            (nested["items"] as? List<*> ?: nested["list"] as? List<*>)?.let { return it }
+        }
+        return emptyList<Any>()
+    }
+
+    private suspend fun resolveSeasonEpisode(mediaId: String, episodeId: String?): Pair<Int, Int> {
+        val details = getDetails(mediaId)
+        val isMovie = details.mediaType == "movie"
+        if (isMovie) return Pair(0, 0)
+        if (episodeId == null) return Pair(1, 1)
+        val parts = episodeId.split("_")
+        if (parts.size >= 3 && parts[0] == "ep") {
+            return Pair(parts[1].toIntOrNull() ?: 1, parts[2].toIntOrNull() ?: 1)
+        }
+        return Pair(1, 1)
+    }
+
+    suspend fun getPlaybackUrl(mediaId: String, detailPath: String, season: Int, episode: Int): String? {
+        // Direct upstream call — no custom backend proxy.
+        // Calls h5-api.aoneroom.com/wefeed-h5api-bff/subject/play via StreamResolver → MovieBoxProvider.
+
+        android.util.Log.e("PLAYBACK_API", "=== DIRECT UPSTREAM CALL ===")
+        android.util.Log.e("PLAYBACK_API", "API Base: h5-api.aoneroom.com/wefeed-h5api-bff")
+        android.util.Log.e("PLAYBACK_API", "Endpoint: GET /subject/play")
+        android.util.Log.e("PLAYBACK_API", "SubjectId = $mediaId")
+        android.util.Log.e("PLAYBACK_API", "DetailPath = $detailPath")
+        android.util.Log.e("PLAYBACK_API", "Season = $season")
+        android.util.Log.e("PLAYBACK_API", "Episode = $episode")
+
+        val result: ResolvedStreamPayload
+        try {
+            Log.d("PLAYBACK_API", "Calling streamRepository.getStreams() → MovieBoxProvider → upstream API")
+            result = streamRepository.getStreams(
+                subjectId = mediaId,
+                detailPath = detailPath,
+                season = season,
+                episode = episode
+            )
+            Log.e("PLAYBACK_API", "=== DIRECT RESPONSE ===")
+            Log.e("PLAYBACK_API", "Success = ${result.success}")
+            Log.e("PLAYBACK_API", "Streams count = ${result.streams.size}")
+            Log.e("PLAYBACK_API", "Selected stream present = ${result.selectedStream != null}")
+            // FLOW_TRACE LOG 4 & 5 — selected stream + URL at the repository boundary
+            Log.e("FLOW_TRACE", "Repository received count = ${result.streams.size}")
+            Log.e("FLOW_TRACE", "Selected stream = ${result.selectedStream}")
+            Log.e("FLOW_TRACE", "Selected URL = ${result.selectedStream?.url}")
+        } catch (e: UnknownHostException) {
+            Log.e("PLAYBACK_API", "NETWORK ERROR: Upstream API unreachable (unknown host)")
+            throw IOException("Upstream API unreachable", e)
+        } catch (e: ConnectException) {
+            Log.e("PLAYBACK_API", "NETWORK ERROR: Connection refused to upstream API")
+            throw IOException("Unable to connect to upstream API", e)
+        } catch (e: SocketTimeoutException) {
+            Log.e("PLAYBACK_API", "NETWORK ERROR: Timeout connecting to upstream API")
+            throw IOException("Upstream API timeout", e)
+        } catch (e: IOException) {
+            Log.e("PLAYBACK_API", "NETWORK ERROR: I/O Error - ${e.message}")
+            throw IOException("Network error: ${e.message}", e)
+        }
+
+        if (!result.success) {
+            Log.e("PLAYBACK_API", "VALIDATION ERROR: Upstream returned success=false")
+            throw IOException("No playable stream available")
+        }
+
+        if (result.selectedStream != null) {
+            val url = result.selectedStream.url
+            if (url.isBlank()) {
+                Log.e("PLAYBACK_API", "VALIDATION ERROR: selectedStream.url is empty")
+                throw IOException("Selected stream URL is blank")
+            }
+            Log.e("PLAYBACK_API", "=== SELECTED STREAM ===")
+            Log.e("PLAYBACK_API", "URL = $url")
+            Log.e("PLAYBACK_API", "Quality = ${result.selectedStream.quality}")
+            Log.e("PLAYBACK_API", "Type = ${result.selectedStream.type}")
+            return url
+        }
+
+        if (result.streams.isNotEmpty()) {
+            Log.w("PLAYBACK_API", "selectedStream is null, falling back to highest quality stream")
+            val sorted = result.streams.sortedByDescending { it.numericQuality }
+            val best = sorted.first()
+            if (best.url.isBlank()) {
+                Log.e("PLAYBACK_API", "VALIDATION ERROR: Best stream URL is empty")
+                throw IOException("No valid stream URL found")
+            }
+            Log.e("PLAYBACK_API", "=== FALLBACK STREAM ===")
+            Log.e("PLAYBACK_API", "URL = ${best.url}")
+            Log.e("PLAYBACK_API", "Quality = ${best.quality}")
+            return best.url
+        }
+
+        Log.e("PLAYBACK_API", "VALIDATION ERROR: No streams available in response")
+        throw IOException("No playable stream found")
+    }
+
     suspend fun getPlaybackDetails(mediaId: String, episodeId: String?): StreamPlayback {
-        // HARD GUARD: Never silently serve mock content for real API calls.
-        // If a non-production ID somehow reaches here, throw — do not play demo videos.
         if (itemsPool.any { it.id == mediaId } || mediaId.all { !it.isDigit() }) {
             android.util.Log.e("PLAYBACK_API", "BLOCKED: mediaId='$mediaId' matched mock pool or contains no digits. This is a dev-only ID. Real movies have numeric subjectIds.")
             throw IOException("Invalid subject ID '$mediaId'. Navigation passed a non-production ID.")
@@ -281,16 +522,13 @@ class MovieRepository(
         try {
             val details = getDetails(mediaId)
 
-            // Use the MOVIE's own detailPath from the API — NOT dub/star paths
+            // PARITY — send the FULL detailPath to the upstream /subject/play call, exactly
+            // like the website does (streamwave moviebox.js passes detailPath verbatim and uses
+            // it to build the CDN Referer https://movie-box.co/movies/${detailPath}?id=${id}).
+            // No truncation: MovieBox detailPaths contain no "/", and the full value is required.
             var cleanPath = details.detailPath ?: ""
-            if (cleanPath.isNotEmpty()) {
-                // Strip any leading path segments, keep only the slug
-                cleanPath = cleanPath.substringAfterLast("/")
-            }
-
-            // Only fall back to title slug if the API truly didn't return detailPath
             if (cleanPath.isEmpty() && details.title.isNotEmpty()) {
-                android.util.Log.w("DETAIL_PATH", "Movie detailPath was null from API, generating slug from title — playback may fail")
+                android.util.Log.w("DETAIL_PATH", "Movie detailPath was null from API, generating slug from title")
                 val titleSlug = details.title.lowercase()
                     .replace(Regex("[^a-z0-9\\s-]"), "")
                     .replace(Regex("\\s+"), "-")
@@ -298,139 +536,104 @@ class MovieRepository(
                 cleanPath = if (titleSlug.isNotEmpty()) "$titleSlug-$mediaId" else mediaId
             }
 
-            val isMovie = details.mediaType == "movie"
-            val se: Int
-            val ep: Int
-            if (isMovie) {
-                se = 0
-                ep = 0
-            } else {
-                if (episodeId == null) {
-                    se = 1
-                    ep = 1
-                } else {
-                    val parts = episodeId.split("_")
-                    if (parts.size >= 3 && parts[0] == "ep") {
-                        se = parts[1].toIntOrNull() ?: 1
-                        ep = parts[2].toIntOrNull() ?: 1
-                    } else {
-                        se = 1
-                        ep = 1
-                    }
-                }
-            }
+            val (se, ep) = resolveSeasonEpisode(mediaId, episodeId)
 
-            val service = apiService ?: throw Exception("ApiService is null")
+            android.util.Log.d("PLAYBACK_API", "=== PLAYBACK DETAILS ===")
+            android.util.Log.d("PLAYBACK_API", "SubjectId = $mediaId")
+            android.util.Log.d("PLAYBACK_API", "Title = ${details.title}")
+            android.util.Log.d("PLAYBACK_API", "MediaType = ${details.mediaType}")
+            android.util.Log.d("PLAYBACK_API", "Season = $se")
+            android.util.Log.d("PLAYBACK_API", "Episode = $ep")
+            android.util.Log.d("PLAYBACK_API", "DetailPath = $cleanPath")
 
-            val referer = "https://movie-box.co/movies/$cleanPath?id=$mediaId&type=/movie/detail&detailSe=&detailEp=&lang=en"
-            val playUrl = "https://movie-box.co/wefeed-h5api-bff/subject/play?subjectId=$mediaId&se=$se&ep=$ep&detailPath=$cleanPath"
+            val streamUrl = getPlaybackUrl(mediaId, cleanPath, se, ep)
+                ?: throw IOException("Stream URL resolution failed: returned null")
 
-            // Debugging Requirements: Before every request print:
-            android.util.Log.d("PLAY_PARAMS", "subjectId=$mediaId, se=$se, ep=$ep")
-            android.util.Log.d("DETAIL_PATH", cleanPath)
-            android.util.Log.d("SUBJECT_ID", mediaId)
-            android.util.Log.d("DETAIL_PATH_SOURCE", if (details.detailPath != null) "API (movie's own)" else "GENERATED (slug fallback)")
-            android.util.Log.d("SEASON", se.toString())
-            android.util.Log.d("EPISODE", ep.toString())
-            android.util.Log.d("PLAY_URL", playUrl)
+            val format = if (streamUrl.contains(".m3u8", ignoreCase = true)) "hls" else "mp4"
+            android.util.Log.d("PLAYBACK_API", "Stream format detected = $format")
 
-            var streams = emptyList<com.example.data.model.ResolveStreamItem>()
-            var captions = emptyList<com.example.data.model.ResolveCaptionItem>()
+            // ADDITIVE (UI only): expose all already-resolved qualities + existing-API captions.
+            // These re-read the SAME cached resolution (cache hit, no extra resolve) and the
+            // existing caption API — the resolution algorithm and streamUrl above are untouched.
+            val qualities = getPlaybackQualities(mediaId, cleanPath, se, ep, streamUrl)
+            val subtitles = getSubtitles(mediaId, cleanPath)
+            android.util.Log.d("PLAYBACK_API", "Quality options = ${qualities.map { it.label }}")
+            android.util.Log.d("PLAYBACK_API", "Subtitle tracks = ${subtitles.map { it.label }}")
 
-            // 1. Call MovieBox subject/play — the only real stream source
-            try {
-                android.util.Log.d("PLAY_API_REQUEST", ">>> GET movie-box.co/subject/play subjectId=$mediaId detailPath=$cleanPath se=$se ep=$ep")
-                val token =
-                    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjg5NDQ2ODQzMjM3MzI2MDg1MTIsImF0cCI6MywiZXh0IjoiMTc4MDI4ODA4MiIsImV4cCI6MTc4ODA2NDA4MiwiaWF0IjoxNzgwMjg3NzgyfQ.30FAw16jFMuEHeUfjmSN1atbeYSZUn4QHFIxp3repbI"
-
-                android.util.Log.e(
-                    "PLAY_REQUEST",
-                    "subjectId=$mediaId se=$se ep=$ep detailPath=$cleanPath"
-                )
-                val movieBoxResponse = service.getMovieBoxPlay(
-                    referer = referer,
-                    authorization = "Bearer $token",
-                    cookie = "token=$token",
-                    subjectId = mediaId,
-                    detailPath = cleanPath,
-                    se = se,
-                    ep = ep
-                )
-
-                android.util.Log.e(
-                    "PLAY_RESPONSE",
-                    "streams=${movieBoxResponse.data?.streams?.size}"
-                )
-
-                android.util.Log.d("MOVIEBOX_RESPONSE", "code=${movieBoxResponse.code}, message=${movieBoxResponse.message}")
-                android.util.Log.d("STREAM_COUNT", (movieBoxResponse.data?.streams?.size ?: 0).toString())
-
-                // Print raw parsed response for debugging
-                android.util.Log.d("PLAY_RESPONSE", "code=${movieBoxResponse.code} message=${movieBoxResponse.message} data=${movieBoxResponse.data}")
-
-                // Verify API-level success (code 0 = OK, anything else = server error)
-                if (movieBoxResponse.code != null && movieBoxResponse.code != 0) {
-                    android.util.Log.e("PLAY_API_ERROR", "MovieBox API returned error code=${movieBoxResponse.code} message=${movieBoxResponse.message}")
-                    throw IOException("MovieBox API error: code=${movieBoxResponse.code}, message=${movieBoxResponse.message}")
-                }
-
-                streams = movieBoxResponse.data?.streams ?: emptyList()
-                captions = movieBoxResponse.data?.captions ?: emptyList()
-
-                android.util.Log.d("PLAY_STREAMS_RAW", "Raw streams from API: $streams")
-            } catch (e: IOException) {
-                // Re-throw IOExceptions (includes our code-check error above)
-                android.util.Log.e("PLAY_API_ERROR", "MovieBox Play API IOException", e)
-                throw e
-            } catch (e: Exception) {
-                android.util.Log.e("PLAY_API_ERROR", "MovieBox Play API unexpected error", e)
-                throw IOException("Failed to call MovieBox play API: ${e.message}", e)
-            }
-
-            // Debugging Requirements: Print STREAM_COUNT
-            android.util.Log.d("STREAM_COUNT", streams.size.toString())
-
-            // Log requirements (Available Streams)
-            android.util.Log.d("Available Streams", streams.toString())
-
-            if (streams.isNotEmpty()) {
-                // Stream Selection Logic: 1080 -> 720 -> 480 -> 360 -> first available
-                val selectedStream = streams.find { it.getResolvedQuality().contains("1080") }
-                    ?: streams.find { it.getResolvedQuality().contains("720") }
-                    ?: streams.find { it.getResolvedQuality().contains("480") }
-                    ?: streams.find { it.getResolvedQuality().contains("360") }
-                    ?: streams.first()
-
-                // Debugging Requirements: Print STREAM_URL
-                android.util.Log.d("STREAM_URL", selectedStream.getResolvedUrl())
-                // Log requirement (Selected Stream)
-                android.util.Log.d("Selected Stream", selectedStream.toString())
-
-                val sortedStreams = streams.sortedByDescending { stream ->
-                    val qualityStr = stream.getResolvedQuality()
-                    val numericPortion = qualityStr.filter { it.isDigit() }.toIntOrNull() ?: 0
-                    numericPortion
-                }
-
-                return StreamPlayback(
-                    mediaId = mediaId,
-                    episodeId = episodeId,
-                    streamUrl = selectedStream.getResolvedUrl(),
-                    format = selectedStream.getResolvedFormat(),
-                    qualities = sortedStreams.map { PlaybackQuality(label = it.getResolvedQuality(), url = it.getResolvedUrl()) },
-                    audioTracks = listOf(AudioTrack(label = "Default", languageCode = "en")),
-                    subtitles = captions.map { SubtitleTrack(label = it.getResolvedLabel(), url = it.getResolvedUrl(), languageCode = it.getResolvedLanguageCode()) }
-                )
-            } else {
-                android.util.Log.e("PLAYBACK_API", "No streams found for subjectId=$mediaId, detailPath=$cleanPath, se=$se, ep=$ep")
-                throw IOException("No playback streams available for this title. Please try again later.")
-            }
+            return StreamPlayback(
+                mediaId = mediaId,
+                episodeId = episodeId,
+                streamUrl = streamUrl,
+                format = format,
+                qualities = qualities,
+                audioTracks = listOf(AudioTrack(label = "Default", languageCode = "en")),
+                subtitles = subtitles
+            )
         } catch (e: IOException) {
-            android.util.Log.e("PLAYBACK_API", "Playback stream resolution failed", e)
+            android.util.Log.e("PLAYBACK_API", "IO Error: ${e.message}")
             throw e
         } catch (e: Exception) {
-            android.util.Log.e("PLAYBACK_API", "Unexpected error resolving streams", e)
+            android.util.Log.e("PLAYBACK_API", "Unexpected error: ${e.javaClass.simpleName} - ${e.message}")
             throw IOException("Failed to load playback stream: ${e.message}", e)
+        }
+    }
+
+    /**
+     * ADDITIVE — enumerate every already-resolved stream as a selectable quality.
+     * Re-reads streamRepository.getStreams(), which the resolver has just cached for this
+     * subject/se/ep, so this is a cache hit (no extra network resolve) and the resolution
+     * algorithm is NOT touched. Always returns at least the "Auto" entry pointing at the
+     * exact URL ExoPlayer is already playing.
+     */
+    suspend fun getPlaybackQualities(
+        subjectId: String,
+        detailPath: String,
+        season: Int,
+        episode: Int,
+        bestUrl: String
+    ): List<PlaybackQuality> {
+        val auto = PlaybackQuality(label = "Auto", url = bestUrl)
+        return try {
+            val result = streamRepository.getStreams(subjectId, detailPath, season, episode)
+            val mapped = result.streams
+                .filter { it.url.isNotBlank() }
+                .sortedByDescending { it.numericQuality }
+                .map { s ->
+                    val label = if (s.numericQuality > 0) "${s.numericQuality}p"
+                                else s.quality.ifBlank { "Source" }
+                    PlaybackQuality(label = label, url = s.url)
+                }
+                .distinctBy { it.label }
+            listOf(auto) + mapped
+        } catch (e: Exception) {
+            android.util.Log.w("PLAYBACK_API", "Quality enumeration failed: ${e.message}")
+            listOf(auto)
+        }
+    }
+
+    /**
+     * ADDITIVE — fetch captions via the EXISTING (untouched) caption API and map them to
+     * the UI's SubtitleTrack model. Best-effort: any failure yields an empty list so video
+     * playback is never blocked by caption errors.
+     */
+    suspend fun getSubtitles(
+        subjectId: String,
+        detailPath: String
+    ): List<SubtitleTrack> {
+        return try {
+            streamRepository.getCaptions(id = subjectId, subjectId = subjectId, detailPath = detailPath)
+                .filter { it.url.isNotBlank() }
+                .map { c ->
+                    SubtitleTrack(
+                        label = c.languageName.ifBlank { c.language.uppercase() },
+                        url = c.url,
+                        languageCode = c.language
+                    )
+                }
+                .distinctBy { it.languageCode }
+        } catch (e: Exception) {
+            android.util.Log.w("PLAYBACK_API", "Caption fetch failed: ${e.message}")
+            emptyList()
         }
     }
 
@@ -622,6 +825,78 @@ class MovieRepository(
         } catch (e: Exception) {
             android.util.Log.e("FILTER_API", "Error in getFilteredSubjects, returning empty results as requested", e)
             emptyList()
+        }
+    }
+
+    // One page of Explore results plus pagination flags from data.pager.
+    data class ExplorePage(
+        val items: List<MediaSummary>,
+        val hasMore: Boolean,
+        val nextPage: Int
+    )
+
+    // Explore page (MovieBox-style) filtered subjects. "All" maps to empty string.
+    // Parses data.items and data.pager.{hasMore,nextPage}. Reuses the shared
+    // Retrofit/OkHttp interceptors (headers injected centrally — none hardcoded here).
+    suspend fun getExploreSubjects(
+        genre: String,
+        country: String,
+        year: String,
+        page: Int,
+        perPage: Int = 28
+    ): ExplorePage {
+        val request = ExploreFilterRequest(
+            genre = if (genre == "All") "" else genre,
+            country = if (country == "All") "" else country,
+            year = if (year == "All") "" else year,
+            page = page,
+            perPage = perPage
+        )
+
+        android.util.Log.d("EXPLORE_REQUEST", "Request parameters: $request")
+
+        return try {
+            val response = apiService?.getExploreFilter(request)
+            val data = response?.get("data") as? Map<*, *>
+            val rawList = (data?.get("items") ?: data?.get("subjects") ?: data?.get("list")) as? List<*>
+                ?: emptyList<Any>()
+
+            val items = rawList.mapNotNull { item ->
+                if (item !is Map<*, *>) return@mapNotNull null
+                val id = (item["subjectId"] ?: item["id"] ?: "").toString()
+                val title = (item["title"] ?: item["name"] ?: "").toString()
+                if (id.isEmpty() || title.isEmpty()) return@mapNotNull null
+
+                val cover = item["cover"]
+                val posterPath = if (cover is Map<*, *>) (cover["url"] ?: "").toString() else (cover ?: "").toString()
+                val stills = item["stills"]
+                val backdropPath = if (stills is Map<*, *>) (stills["url"] ?: "").toString() else (stills ?: "").toString()
+                val ratingStr = (item["imdbRatingValue"] ?: item["rating"] ?: "0.0").toString()
+                val yearVal = (item["releaseDate"] ?: item["year"] ?: "").toString().take(4)
+                val genreStr = (item["genre"] ?: "").toString()
+                val subjectType = (item["subjectType"] as? Number)?.toInt()
+
+                MediaSummary(
+                    id = id,
+                    title = title,
+                    posterPath = posterPath,
+                    backdropPath = backdropPath,
+                    mediaType = if (subjectType == 1) "movie" else "tv",
+                    rating = ratingStr.toDoubleOrNull() ?: 0.0,
+                    year = yearVal,
+                    genres = if (genreStr.isNotEmpty()) genreStr.split(",") else emptyList()
+                )
+            }
+
+            val pager = data?.get("pager") as? Map<*, *>
+            val hasMore = (pager?.get("hasMore") as? Boolean) ?: false
+            val nextPage = (pager?.get("nextPage") as? Number)?.toInt() ?: (page + 1)
+
+            android.util.Log.d("EXPLORE_RESPONSE", "items=${items.size} hasMore=$hasMore nextPage=$nextPage")
+            ExplorePage(items, hasMore, nextPage)
+        } catch (e: Exception) {
+            android.util.Log.e("EXPLORE_API", "Error in getExploreSubjects", e)
+            ExplorePage(emptyList(), false, page)
         }
     }
 

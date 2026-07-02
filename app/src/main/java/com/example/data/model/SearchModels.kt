@@ -1,5 +1,6 @@
 package com.example.data.model
 
+import androidx.compose.runtime.Immutable
 import com.squareup.moshi.JsonClass
 
 @JsonClass(generateAdapter = true)
@@ -32,6 +33,7 @@ data class SearchPager(
     val isLast: Boolean? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class SearchItem(
     val subjectId: String,
@@ -46,6 +48,7 @@ data class SearchItem(
     val corner: String? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class SearchCover(
     val url: String? = null
@@ -63,6 +66,7 @@ data class SearchSuggestionData(
     val items: List<SearchSuggestionItem>? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class SearchSuggestionItem(
     val type: Int? = null,
@@ -100,5 +104,16 @@ data class FilterRequest(
     val sort: String? = null,
     val page: Int = 1,
     val perPage: Int = 20
+)
+
+// Explore page (MovieBox-style) filter request body.
+// "All" selections are mapped to empty strings by the repository before building this.
+@JsonClass(generateAdapter = true)
+data class ExploreFilterRequest(
+    val genre: String = "",
+    val country: String = "",
+    val year: String = "",
+    val page: Int = 1,
+    val perPage: Int = 28
 )
 

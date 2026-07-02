@@ -76,7 +76,7 @@ object RetrofitClient {
                     android.util.Log.d("RESPONSE_BODY", responseBodyString)
                     
                     if (urlString.contains("subject/play")) {
-                        android.util.Log.d("PLAY_RESPONSE_BODY", responseBodyString)
+                        android.util.Log.d("STREAM_RESOLVER_RESPONSE", responseBodyString)
                     } else if (urlString.contains("subject/search") && !urlString.contains("suggest")) {
                         android.util.Log.d("SEARCH_RESPONSE", responseBodyString)
                     } else if (urlString.contains("subject/filter")) {
@@ -114,25 +114,20 @@ object RetrofitClient {
         @Throws(IOException::class)
         override fun intercept(chain: Interceptor.Chain): Response {
             val originalRequest = chain.request()
-            val host = originalRequest.url.host
-
-            // CRITICAL FIX: movie-box.co/subject/play does NOT accept Authorization.
-            // The web client never sends Authorization to this endpoint.
-            // Sending it causes the API to reject the request or return an error body
-            // which Moshi parses as data=null → streams=null → empty list.
-            val isMovieBoxPlayEndpoint = host.contains("movie-box.co")
 
             val requestBuilder = originalRequest.newBuilder()
                 .header("Accept", "application/json")
                 .header("lang", "en")
                 .header("versioncode", "11")
                 .header("clienttype", "0")
-
-            // Only add Authorization for the BFF proxy (aoneroom.com), not for movie-box.co
-            if (!isMovieBoxPlayEndpoint) {
-                requestBuilder.header("Authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjg5NDQ2ODQzMjM3MzI2MDg1MTIsImF0cCI6MywiZXh0IjoiMTc4MDI4ODA4MiIsImV4cCI6MTc4ODA2NDA4MiwiaWF0IjoxNzgwMjg3NzgyfQ.30FAw16jFMuEHeUfjmSN1atbeYSZUn4QHFIxp3repbI")
-                requestBuilder.header("Content-Type", "application/json")
-            }
+                .header("Authorization", "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjg5NDQ2ODQzMjM3MzI2MDg1MTIsImF0cCI6MywiZXh0IjoiMTc4MDI4ODA4MiIsImV4cCI6MTc4ODA2NDA4MiwiaWF0IjoxNzgwMjg3NzgyfQ.30FAw16jFMuEHeUfjmSN1atbeYSZUn4QHFIxp3repbI")
+                .header("Content-Type", "application/json")
+                // MovieBox web headers — required by subject/filter (Explore) and harmless
+                // for other endpoints. Injected centrally so no request hardcodes them.
+                .header("Origin", "https://movie-box.co")
+                .header("Referer", "https://movie-box.co/web/tv-series")
+                .header("x-request-lang", "en")
+                .header("x-client-info", "{\"timezone\":\"Asia/Calcutta\"}")
 
             return chain.proceed(requestBuilder.build())
         }

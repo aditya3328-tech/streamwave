@@ -1,7 +1,9 @@
 package com.example.data.model
 
+import androidx.compose.runtime.Immutable
 import com.squareup.moshi.JsonClass
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class CoverUrl(
     val url: String?,
@@ -9,6 +11,7 @@ data class CoverUrl(
     val height: Int? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class SubjectModel(
     val subjectId: String,
@@ -21,7 +24,10 @@ data class SubjectModel(
     val cover: CoverUrl? = null,
     val imdbRatingValue: String? = null,
     val trailer: TrailerModel? = null,
-    val detailPath: String? = null
+    val detailPath: String? = null,
+    // The backend returns the available audio/subtitle languages nested inside the
+    // subject object (data.subject.dubs), NOT at the top-level data.dubs.
+    val dubs: List<DubModel> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
@@ -39,6 +45,7 @@ data class TrailerModel(
     val cover: CoverUrl? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class DubModel(
     val subjectId: String,
@@ -49,6 +56,7 @@ data class DubModel(
     val detailPath: String? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class StarModel(
     val staffId: String,
@@ -59,12 +67,14 @@ data class StarModel(
     val detailPath: String? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class ResolutionModel(
     val resolution: Int? = null,
     val epNum: Int? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class SeasonModel(
     val se: Int? = null,
@@ -80,6 +90,7 @@ data class ResourceModel(
     val uploadBy: String? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class UserCommentModel(
     val userId: String,
@@ -87,6 +98,7 @@ data class UserCommentModel(
     val avatar: String? = null
 )
 
+@Immutable
 @JsonClass(generateAdapter = true)
 data class CommentItemModel(
     val postId: String,
@@ -110,7 +122,6 @@ data class DetailData(
     val hasResource: Boolean? = null,
     val trailer: TrailerModel? = null,
     val imdbRatingCount: Int? = null,
-    val dubs: List<DubModel>? = null,
     val stars: List<StarModel>? = null,
     val resource: ResourceModel? = null,
     val postList: PostListModel? = null

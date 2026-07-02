@@ -22,7 +22,10 @@ import com.example.ui.components.AMOLED_BLACK
 import com.example.ui.components.CRUNCHY_ORANGE
 import com.example.ui.components.DEEP_GREY
 import com.example.ui.screens.*
+import com.example.ui.screens.movie.MovieTabScreen
 import com.example.ui.viewmodel.CineVerseViewModel
+import com.example.ui.viewmodel.MovieTabViewModel
+import com.example.sports.ui.SportsRoot
 
 object Screen {
     const val TabsShell = "tabs_shell"
@@ -44,6 +47,7 @@ object Screen {
 @Composable
 fun AppNavigation(
     viewModel: CineVerseViewModel,
+    movieTabViewModel: MovieTabViewModel,
     modifier: Modifier = Modifier
 ) {
     val navController = rememberNavController()
@@ -57,6 +61,7 @@ fun AppNavigation(
         composable(Screen.TabsShell) {
             TabsShellScreen(
                 viewModel = viewModel,
+                movieTabViewModel = movieTabViewModel,
                 onNavigateToDetails = { id ->
                     navController.navigate(Screen.details(id))
                 },
@@ -100,6 +105,9 @@ fun AppNavigation(
                 onNavigateBack = { navController.popBackStack() },
                 onNavigateToDetails = { mId ->
                     navController.navigate(Screen.details(mId))
+                },
+                onNavigateToStaff = { sId ->
+                    navController.navigate(Screen.staff(sId))
                 }
             )
         }
@@ -128,6 +136,9 @@ fun AppNavigation(
                 },
                 onNavigateToPlayer = { mId, epId ->
                     navController.navigate(Screen.player(mId, epId))
+                },
+                onNavigateToStaff = { sId ->
+                    navController.navigate(Screen.staff(sId))
                 }
             )
         }
@@ -138,6 +149,7 @@ fun AppNavigation(
 @Composable
 fun TabsShellScreen(
     viewModel: CineVerseViewModel,
+    movieTabViewModel: MovieTabViewModel,
     onNavigateToDetails: (String) -> Unit,
     onNavigateToPlayer: (String, String?) -> Unit
 ) {
@@ -150,7 +162,13 @@ fun TabsShellScreen(
                 contentColor = Color.LightGray,
                 modifier = Modifier.testTag("bottom_nav_bar")
             ) {
-                // Bottom Tab 1: Home
+                // Visible order: Home, Movies, Explore, Search, Library.
+                // NOTE: each item's index (selected / selectTab) still maps to its
+                // screen in the `when (tabIndex)` block below — only the DECLARATION
+                // ORDER changed, so routing is unaffected.
+                //   0 = Home, 1 = Search, 2 = Movies, 3 = Explore, 4 = Library, 5 = Sports
+
+                // Bottom Tab 1: Home  (screen index 0)
                 NavigationBarItem(
                     selected = currentTab == 0,
                     onClick = { viewModel.selectTab(0) },
@@ -165,22 +183,7 @@ fun TabsShellScreen(
                     )
                 )
 
-                // Bottom Tab 2: Search
-                NavigationBarItem(
-                    selected = currentTab == 1,
-                    onClick = { viewModel.selectTab(1) },
-                    icon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search") },
-                    label = { Text("Search", fontSize = 10.sp) },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.White,
-                        selectedTextColor = Color.White,
-                        indicatorColor = CRUNCHY_ORANGE,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
-                    )
-                )
-
-                // Bottom Tab 3: Movies
+                // Bottom Tab 2: Movies  (screen index 2)
                 NavigationBarItem(
                     selected = currentTab == 2,
                     onClick = { viewModel.selectTab(2) },
@@ -195,12 +198,12 @@ fun TabsShellScreen(
                     )
                 )
 
-                // Bottom Tab 4: TV Shows
+                // Bottom Tab 3: Explore  (screen index 3)
                 NavigationBarItem(
                     selected = currentTab == 3,
                     onClick = { viewModel.selectTab(3) },
-                    icon = { Icon(imageVector = Icons.Default.Tv, contentDescription = "TV Shows") },
-                    label = { Text("TV Shows", fontSize = 10.sp) },
+                    icon = { Icon(imageVector = Icons.Default.Tv, contentDescription = "Explore") },
+                    label = { Text("Explore", fontSize = 10.sp) },
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = Color.White,
                         selectedTextColor = Color.White,
@@ -210,7 +213,22 @@ fun TabsShellScreen(
                     )
                 )
 
-                // Bottom Tab 5: Library
+                // Bottom Tab 4: Search  (screen index 1)
+                NavigationBarItem(
+                    selected = currentTab == 1,
+                    onClick = { viewModel.selectTab(1) },
+                    icon = { Icon(imageVector = Icons.Default.Search, contentDescription = "Search") },
+                    label = { Text("Search", fontSize = 10.sp) },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Color.White,
+                        selectedTextColor = Color.White,
+                        indicatorColor = CRUNCHY_ORANGE,
+                        unselectedIconColor = Color.Gray,
+                        unselectedTextColor = Color.Gray
+                    )
+                )
+
+                // Bottom Tab 5: Library  (screen index 4)
                 NavigationBarItem(
                     selected = currentTab == 4,
                     onClick = { viewModel.selectTab(4) },
@@ -224,6 +242,11 @@ fun TabsShellScreen(
                         unselectedTextColor = Color.Gray
                     )
                 )
+
+                // Sports (screen index 5) is intentionally HIDDEN from the bottom
+                // navigation for now. The NavigationBarItem is removed, but ALL Sports
+                // code — the `5 -> SportsRoot(...)` branch below, SportsRoot, its APIs,
+                // repositories, ViewModels, routes and screens — is left fully intact.
             }
         }
     ) { innerPadding ->
@@ -248,12 +271,13 @@ fun TabsShellScreen(
                     onNavigateToDetails = onNavigateToDetails,
                     modifier = scopeModifier
                 )
-                2 -> MoviesScreen(
-                    viewModel = viewModel,
+                2 -> MovieTabScreen(
+                    viewModel = movieTabViewModel,
                     onNavigateToDetails = onNavigateToDetails,
+                    onNavigateToPlayer = onNavigateToPlayer,
                     modifier = scopeModifier
                 )
-                3 -> TVShowsScreen(
+                3 -> ExploreScreen(
                     viewModel = viewModel,
                     onNavigateToDetails = onNavigateToDetails,
                     modifier = scopeModifier
@@ -263,6 +287,8 @@ fun TabsShellScreen(
                     onNavigateToDetails = onNavigateToDetails,
                     modifier = scopeModifier
                 )
+                // Sports mini-app — its own nested NavHost; no movie callbacks are threaded in.
+                5 -> SportsRoot(modifier = scopeModifier)
             }
         }
     }

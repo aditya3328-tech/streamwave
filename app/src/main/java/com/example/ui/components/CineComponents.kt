@@ -16,11 +16,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.ColorPainter
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -32,7 +34,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
 import coil.request.ImageRequest
+import coil.size.Precision
 import com.example.data.model.MediaSummary
 
 // Hex Colors representing AMOLED themes and neon accents
@@ -42,6 +46,55 @@ val NETFLIX_RED = Color(0xFFE50914)
 val CRUNCHY_ORANGE = Color(0xFFFF640A)
 val GLASS_TRANSPARENT = Color(0x33FFFFFF)
 val GLASS_BORDER = Color(0x19FFFFFF)
+
+/**
+ * Reusable, memory-friendly image loader for posters / avatars / backdrops.
+ *
+ * Key optimizations vs a raw [AsyncImage]:
+ *  - explicit decode [size] (default 300×450) → never decodes a full 2–3 MB source bitmap
+ *    into memory; a 300×450 ARGB_8888 bitmap is ~0.5 MB regardless of source resolution.
+ *  - memory + disk cache explicitly enabled → instant reuse on re-scroll / revisit.
+ *  - crossfade disabled → no per-frame alpha animation during fast scrolling.
+ *  - hardware bitmaps allowed → bitmap lives in graphics memory, off the Java heap.
+ *  - a cheap [ColorPainter] placeholder/error → no broken images, no layout jump.
+ *
+ * The [ImageRequest] is [remember]ed so it is not rebuilt on every recomposition.
+ */
+@Composable
+fun OptimizedPosterImage(
+    data: Any?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+    widthPx: Int = 300,
+    heightPx: Int = 450,
+    placeholderColor: Color = DEEP_GREY
+) {
+    val context = LocalContext.current
+    val request = remember(data, widthPx, heightPx) {
+        ImageRequest.Builder(context)
+            .data(data)
+            .size(widthPx, heightPx)
+            // INEXACT lets Coil downsample to the nearest power-of-two ≤ target — cheaper decode and
+            // a smaller bitmap, so a 2–4 MB source never lands on the heap at full resolution.
+            .precision(Precision.INEXACT)
+            .crossfade(false)
+            .allowHardware(true)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .build()
+    }
+    val placeholder = remember(placeholderColor) { ColorPainter(placeholderColor) }
+    AsyncImage(
+        model = request,
+        contentDescription = contentDescription,
+        modifier = modifier,
+        contentScale = contentScale,
+        placeholder = placeholder,
+        error = placeholder,
+        fallback = placeholder
+    )
+}
 
 @Composable
 fun AMOLEDCanvas(
@@ -167,14 +220,10 @@ fun MovieCard(
                     .clip(RoundedCornerShape(8.dp))
                     .background(DEEP_GREY)
             ) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(media.posterPath)
-                        .crossfade(true)
-                        .build(),
+                OptimizedPosterImage(
+                    data = media.posterPath,
                     contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop
+                    modifier = Modifier.fillMaxSize()
                 )
 
                 // Rating overlay
@@ -258,7 +307,7 @@ fun HorizontalMediaRow(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(items) { media ->
+                items(items, key = { it.id }) { media ->
                     MovieCard(media = media, onClick = { onItemClick(media) })
                 }
             }

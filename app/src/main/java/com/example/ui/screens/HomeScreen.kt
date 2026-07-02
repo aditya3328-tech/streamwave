@@ -7,8 +7,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -43,16 +47,30 @@ fun HomeScreen(
     val watchHistory by viewModel.watchHistory.collectAsState()
     val banners by viewModel.bannerItems.collectAsState()
 
-    // Log the current list of banners for debug tracking
-    LaunchedEffect(banners) {
-        android.util.Log.d("BANNER_COUNT", banners.size.toString())
-        banners.forEach { banner ->
-            android.util.Log.d("BANNER_TITLE", banner.title)
+    // Retain scroll position across recompositions/config-changes and feed the (single) vertical
+    // LazyColumn an explicit, remembered state.
+    val listState = rememberLazyListState()
+
+    // HOME_TRACE diagnostics — section/item counts + heap usage. Home is single-shot (no
+    // pagination/loadMore), so this fires only when the section set actually changes.
+    LaunchedEffect(homeSections) {
+        val totalItems = homeSections.sumOf { s ->
+            s.subjects.size + s.liveList.size + s.filters.size +
+                (s.banner?.items?.size ?: 0) + (s.customData?.items?.size ?: 0)
         }
+        val rt = Runtime.getRuntime()
+        val usedMb = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
+        val maxMb = rt.maxMemory() / (1024 * 1024)
+        android.util.Log.d(
+            "HOME_TRACE",
+            "sections=${homeSections.size} items=$totalItems banners=${banners.size} " +
+                "history=${watchHistory.size} heapUsedMb=$usedMb heapMaxMb=$maxMb"
+        )
     }
 
     AMOLEDCanvas(modifier = modifier) {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 90.dp) // safe target for bottom nav bar
         ) {
@@ -62,7 +80,7 @@ fun HomeScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(480.dp),
+                            .height(320.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         CircularProgressIndicator(color = CRUNCHY_ORANGE)
@@ -114,42 +132,49 @@ fun HomeScreen(
                 }
             }
 
-            // Continue Watching Row (Persistent Room progress tracks)
-            if (watchHistory.isNotEmpty()) {
-                item {
-                    ContinueWatchingRow(
-                        historyItems = watchHistory,
-                        onItemClick = { item ->
-                            onNavigateToPlayer(item.mediaId, item.lastEpisodeId)
-                        }
-                    )
-                }
-            }
-
-            // CMS Dynamic Renderer
-            items(homeSections) { section ->
+            // CMS Dynamic Renderer.
+            // Key MUST be globally unique — the API can return sections sharing the same
+            // type+position, which previously produced duplicate keys and an IllegalArgumentException
+            // ("Key was already used") the moment the colliding section scrolled into view. The
+            // trailing index makes every key unique regardless of the payload.
+            itemsIndexed(
+                homeSections,
+                key = { index, section -> "${section.type}_${section.position}_$index" }
+            ) { _, section ->
                 when (section.type) {
                     "BANNER" -> {
                         val context = LocalContext.current
-                        DynamicHeroCarousel(
-                            banners = banners,
-                            onBannerClick = { banner ->
-                                val subjectId = banner.subjectId ?: "0"
-                                if (subjectId != "0" && subjectId.isNotBlank()) {
-                                    onNavigateToDetails(subjectId)
-                                } else {
-                                    try {
-                                        val intent = android.content.Intent(
-                                            android.content.Intent.ACTION_VIEW,
-                                            android.net.Uri.parse(banner.url ?: "")
-                                        )
-                                        context.startActivity(intent)
-                                    } catch (e: Exception) {
-                                        android.util.Log.e("BANNER_CLICK", "Error launching external url: " + banner.url, e)
+                        // Banner first, then Continue Watching directly beneath it (moved here
+                        // from the top of the list — same row UI, only the position changed).
+                        Column {
+                            DynamicHeroCarousel(
+                                banners = banners,
+                                onBannerClick = { banner ->
+                                    val subjectId = banner.subjectId ?: "0"
+                                    if (subjectId != "0" && subjectId.isNotBlank()) {
+                                        onNavigateToDetails(subjectId)
+                                    } else {
+                                        try {
+                                            val intent = android.content.Intent(
+                                                android.content.Intent.ACTION_VIEW,
+                                                android.net.Uri.parse(banner.url ?: "")
+                                            )
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("BANNER_CLICK", "Error launching external url: " + banner.url, e)
+                                        }
                                     }
                                 }
+                            )
+                            if (watchHistory.isNotEmpty()) {
+                                ContinueWatchingRow(
+                                    historyItems = watchHistory,
+                                    onItemClick = { item ->
+                                        onNavigateToPlayer(item.mediaId, item.lastEpisodeId)
+                                    }
+                                )
                             }
-                        )
+                        }
                     }
                     "FILTER" -> {
                         FilterSection(
@@ -240,161 +265,145 @@ fun DynamicHeroCarousel(
 
     val activeItem = banners[activeIndex]
 
-    // Print active banner title render trace
-    DisposableEffect(activeItem) {
-        android.util.Log.d("BANNER_TITLE_RENDER", activeItem.title)
-        onDispose {}
-    }
-
+    // Old MovieBox-style hero: full-bleed backdrop + a single floating glass card at the bottom.
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(480.dp)
+            .height(320.dp)                 // banner height unchanged
+            .background(Color.Black)        // solid base so no gray ever shows behind the artwork
             .clickable { onBannerClick(activeItem) }
     ) {
-        // Backdrop Image with animation
-        Box(modifier = Modifier.fillMaxSize()) {
-            AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(activeItem.image?.url)
-                    .crossfade(600)
-                    .build(),
-                contentDescription = activeItem.title,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop
-            )
-            // Custom Gradient Overlays for premium AMOLED blending
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(
-                                Color.Black.copy(alpha = 0.5f),
-                                Color.Transparent,
-                                AMOLED_BLACK
-                            ),
-                            startY = 0f,
-                            endY = Float.MAX_VALUE
+        // Full-width backdrop — edge-to-edge, fully covering the hero.
+        // fillMaxSize + Crop guarantees no letterboxing / black bars / gray margins.
+        OptimizedPosterImage(
+            data = activeItem.image?.url,
+            contentDescription = activeItem.title,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            widthPx = 1280,
+            heightPx = 720,
+            placeholderColor = Color.Black
+        )
+
+        // Subtle overall black overlay for readability.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.25f))
+        )
+
+        // Stronger black gradient toward the bottom, behind the floating card.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            Color.Transparent,
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.9f)
                         )
                     )
-            )
-        }
-
-        // Title and controls at the bottom of the banner
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomStart)
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Indicator dots
-            Row(
-                modifier = Modifier.padding(bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                banners.forEachIndexed { idx, _ ->
-                    Box(
-                        modifier = Modifier
-                            .size(if (idx == activeIndex) 10.dp else 6.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(if (idx == activeIndex) CRUNCHY_ORANGE else Color.Gray.copy(alpha = 0.6f))
-                    )
-                }
-            }
-
-            // Genre chips
-            Row(
-                modifier = Modifier.padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val genres = activeItem.subject?.genre?.split(",") ?: emptyList()
-                genres.take(3).forEach { genre ->
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(Color.White.copy(alpha = 0.15f))
-                            .padding(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text(genre.trim(), color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-                activeItem.subject?.corner?.let { corner ->
-                    if (corner.isNotBlank()) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(CRUNCHY_ORANGE.copy(alpha = 0.85f))
-                                .padding(horizontal = 8.dp, vertical = 2.dp)
-                        ) {
-                            Text(corner, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-
-            // Title
-            val cornerText = activeItem.subject?.corner
-            val displayedTitle = if (!cornerText.isNullOrBlank()) {
-                "${activeItem.title} [$cornerText]"
-            } else {
-                activeItem.title
-            }
-
-            Text(
-                text = displayedTitle,
-                color = Color.White,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Black,
-                letterSpacing = (-0.5).sp,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            activeItem.subject?.releaseDate?.take(4)?.let { year ->
-                Text(
-                    text = "Release Year: $year  |  IMDb: ★ ${activeItem.subject.imdbRatingValue ?: "N/A"}",
-                    color = Color.LightGray,
-                    fontSize = 12.sp,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
                 )
+        )
+
+        // Floating glass movie card near the bottom of the banner.
+        Row(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 14.dp)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // LEFT — small poster (~50x75dp), rounded corners.
+            OptimizedPosterImage(
+                data = activeItem.subject?.cover?.url ?: activeItem.image?.url,
+                contentDescription = activeItem.title,
+                modifier = Modifier
+                    .size(width = 50.dp, height = 75.dp)
+                    .clip(RoundedCornerShape(8.dp)),
+                contentScale = ContentScale.Crop,
+                widthPx = 150,
+                heightPx = 225,
+                placeholderColor = DEEP_GREY
+            )
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // CENTER — title (max 2 lines) + metadata row.
+            Column(modifier = Modifier.weight(1f)) {
+                // Many AoneRoom banners send an empty top-level "title" while the real name
+                // lives in subject.title — fall back to it before showing a placeholder.
+                val movieTitle = when {
+                    !activeItem.title.isNullOrBlank() -> activeItem.title
+                    !activeItem.subject?.title.isNullOrBlank() -> activeItem.subject!!.title
+                    else -> "Unknown Title"
+                }
+                Text(
+                    text = movieTitle,
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                // Metadata: 2026 | Action | Adventure
+                val metaParts = remember(activeItem) {
+                    buildList {
+                        activeItem.subject?.releaseDate?.take(4)
+                            ?.takeIf { it.isNotBlank() }?.let { add(it) }
+                        activeItem.subject?.genre
+                            ?.split(",")
+                            ?.map { it.trim() }
+                            ?.filter { it.isNotEmpty() }
+                            ?.take(2)
+                            ?.let { addAll(it) }
+                    }
+                }
+                if (metaParts.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier.padding(top = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Movie,
+                            contentDescription = null,
+                            tint = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(
+                            text = metaParts.joinToString(" | "),
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
 
-            // Play & Info Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Play Button
-                Button(
-                    onClick = { onBannerClick(activeItem) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(46.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = NETFLIX_RED),
-                    shape = RoundedCornerShape(8.dp)
-                ) {
-                    Icon(imageVector = Icons.Default.PlayArrow, contentDescription = null, tint = Color.White)
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Play Now", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+            Spacer(modifier = Modifier.width(12.dp))
 
-                // Details Button (Glassmorphic)
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(46.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.White.copy(alpha = 0.12f))
-                        .clickable { onBannerClick(activeItem) }
-                        .padding(horizontal = 16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("Info", color = Color.White, fontWeight = FontWeight.Bold)
-                }
+            // RIGHT — small circular green play button (icon only).
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF22C55E))
+                    .clickable { onBannerClick(activeItem) },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.PlayArrow,
+                    contentDescription = "Play",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp)
+                )
             }
         }
     }
@@ -422,7 +431,10 @@ fun FilterSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            items(section.filters) { filter ->
+            itemsIndexed(
+                section.filters,
+                key = { index, it -> "${it.title}_${it.query}_$index" }
+            ) { _, filter ->
                 Box(
                     modifier = Modifier
                         .width(130.dp)
@@ -432,14 +444,12 @@ fun FilterSection(
                         .clickable { onFilterClick(filter.query ?: filter.title) }
                 ) {
                     // Image banner behind filter text
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(filter.image?.url)
-                            .crossfade(true)
-                            .build(),
+                    OptimizedPosterImage(
+                        data = filter.image?.url,
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
+                        widthPx = 260,
+                        heightPx = 144
                     )
                     // Dim/Overlay
                     Box(
@@ -468,10 +478,13 @@ fun SubjectsMovieSection(
     section: HomeSection,
     onItemClick: (String) -> Unit
 ) {
-    val subjects = if (section.subjects.isNotEmpty()) {
-        section.subjects
-    } else {
-        section.customData?.items?.mapNotNull { it.subject } ?: emptyList()
+    // Resolve once per section instead of recomputing the mapNotNull on every recomposition.
+    val subjects = remember(section) {
+        if (section.subjects.isNotEmpty()) {
+            section.subjects
+        } else {
+            section.customData?.items?.mapNotNull { it.subject } ?: emptyList()
+        }
     }
 
     if (subjects.isEmpty()) return
@@ -491,7 +504,14 @@ fun SubjectsMovieSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(subjects) { subject ->
+            // The feed routinely repeats the same subject within a single rail (e.g. a title that
+            // is both "Trending" and "For You"). A bare subjectId key therefore collided and crashed
+            // with IllegalArgumentException when the duplicate composed on scroll. The index makes
+            // every key unique even for genuine duplicate subjects.
+            itemsIndexed(
+                subjects,
+                key = { index, subject -> "${subject.subjectType}_${subject.subjectId}_$index" }
+            ) { _, subject ->
                 Box(
                     modifier = Modifier
                         .width(120.dp)
@@ -506,14 +526,12 @@ fun SubjectsMovieSection(
                                 .fillMaxWidth()
                                 .height(160.dp)
                         ) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(subject.cover?.url)
-                                    .crossfade(true)
-                                    .build(),
+                            OptimizedPosterImage(
+                                data = subject.cover?.url,
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                widthPx = 240,
+                                heightPx = 320
                             )
 
                             // IMDb rating value overlay (stars)
@@ -635,7 +653,10 @@ fun SportsLiveSection(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            items(matches) { match ->
+            itemsIndexed(
+                matches,
+                key = { index, it -> "${it.matchId}_$index" }
+            ) { _, match ->
                 Box(
                     modifier = Modifier
                         .width(280.dp)
@@ -681,13 +702,13 @@ fun SportsLiveSection(
                         ) {
                             // Team 1
                             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                AsyncImage(
-                                    model = ImageRequest.Builder(LocalContext.current)
-                                        .data(match.team1?.avatar)
-                                        .crossfade(true)
-                                        .build(),
+                                OptimizedPosterImage(
+                                    data = match.team1?.avatar,
                                     contentDescription = null,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(24.dp),
+                                    contentScale = ContentScale.Fit,
+                                    widthPx = 48,
+                                    heightPx = 48
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
@@ -731,13 +752,13 @@ fun SportsLiveSection(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                AsyncImage(
-                                    model = ImageRequest.Builder(LocalContext.current)
-                                        .data(match.team2?.avatar)
-                                        .crossfade(true)
-                                        .build(),
+                                OptimizedPosterImage(
+                                    data = match.team2?.avatar,
                                     contentDescription = null,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(24.dp),
+                                    contentScale = ContentScale.Fit,
+                                    widthPx = 48,
+                                    heightPx = 48
                                 )
                             }
                         }
@@ -779,7 +800,7 @@ fun ContinueWatchingRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(historyItems) { item ->
+            items(historyItems, key = { it.mediaId }) { item ->
                 Box(
                     modifier = Modifier
                         .width(200.dp)
@@ -794,14 +815,12 @@ fun ContinueWatchingRow(
                                 .fillMaxWidth()
                                 .height(110.dp)
                         ) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(item.posterPath)
-                                    .crossfade(true)
-                                    .build(),
+                            OptimizedPosterImage(
+                                data = item.posterPath,
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
+                                widthPx = 400,
+                                heightPx = 220
                             )
 
                             // Play Overlay Button

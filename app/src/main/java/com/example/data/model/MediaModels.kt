@@ -1,7 +1,9 @@
 package com.example.data.model
 
+import androidx.compose.runtime.Immutable
 import com.squareup.moshi.JsonClass
 
+@Immutable
 data class MediaSummary(
     val id: String,
     val title: String,
@@ -13,6 +15,7 @@ data class MediaSummary(
     val genres: List<String> = emptyList()
 )
 
+@Immutable
 data class MediaDetails(
     val id: String,
     val title: String,
@@ -38,6 +41,7 @@ data class MediaDetails(
     val detailPath: String? = null
 )
 
+@Immutable
 data class StaffSummary(
     val id: String,
     val name: String,
@@ -46,6 +50,7 @@ data class StaffSummary(
     val profilePath: String
 )
 
+@Immutable
 data class StaffDetails(
     val id: String,
     val name: String,
@@ -55,6 +60,48 @@ data class StaffDetails(
     val filmography: List<MediaSummary> = emptyList()
 )
 
+// --- Staff Detail (Person Profile) screen models ---
+
+@Immutable
+data class StaffProfileInfo(
+    val id: String,
+    val name: String,
+    val avatarUrl: String,
+    val roles: String,        // e.g. "Actor • Director • Writer"
+    val biography: String,
+    val totalTitles: Int
+)
+
+@Immutable
+data class RelatedCelebrity(
+    val id: String,
+    val name: String,
+    val role: String,
+    val avatarUrl: String
+)
+
+// One page of /staff/subject-list, plus the staff profile (page 1 only).
+@Immutable
+data class StaffFilmographyPage(
+    val items: List<MediaSummary>,
+    val totalTitles: Int,
+    val hasMore: Boolean,
+    val profile: StaffProfileInfo?
+)
+
+// Aggregate state backing the Staff Detail screen.
+@Immutable
+data class StaffPageData(
+    val profile: StaffProfileInfo,
+    val filmography: List<MediaSummary>,
+    val related: List<RelatedCelebrity>,
+    val totalTitles: Int,
+    val hasMore: Boolean,
+    val isLoadingMore: Boolean,
+    val currentPage: Int
+)
+
+@Immutable
 data class EpisodeSummary(
     val id: String,
     val number: Int,
@@ -65,6 +112,7 @@ data class EpisodeSummary(
     val streamUrl: String
 )
 
+@Immutable
 data class StreamPlayback(
     val mediaId: String,
     val episodeId: String?,
@@ -75,87 +123,36 @@ data class StreamPlayback(
     val subtitles: List<SubtitleTrack> = emptyList()
 )
 
+@Immutable
 data class PlaybackQuality(
     val label: String, // "1080p", "720p", "480p"
     val url: String
 )
 
+@Immutable
 data class AudioTrack(
     val label: String,
     val languageCode: String
 )
 
+@Immutable
 data class SubtitleTrack(
     val label: String,
     val url: String,
     val languageCode: String
 )
 
-@JsonClass(generateAdapter = true)
 data class ResolveStreamsResponse(
-    val streams: List<ResolveStreamItem>? = null,
-    val captions: List<ResolveCaptionItem>? = null
+    val success: Boolean,
+    val streams: List<StreamItem>,
+    val selectedStream: StreamItem?
 )
 
-@JsonClass(generateAdapter = true)
-data class ResolveStreamItem(
-    val url: String?,
-    val link: String? = null,
-    val streamUrl: String? = null,
-    val quality: String? = null,
-    val resolution: String? = null,
-    val resolutions: String? = null,
-    val label: String? = null,
-    val format: String? = null
-) {
-    fun getResolvedUrl(): String {
-        return url ?: link ?: streamUrl ?: ""
-    }
-
-    fun getResolvedQuality(): String {
-        return quality ?: resolution ?: resolutions ?: label ?: "Auto"
-    }
-
-    fun getResolvedFormat(): String {
-        val u = getResolvedUrl()
-        if (format != null) return format
-        if (u.contains(".m3u8", ignoreCase = true)) return "hls"
-        return "mp4"
-    }
-}
-
-@JsonClass(generateAdapter = true)
-data class ResolveCaptionItem(
-    val url: String?,
-    val link: String? = null,
-    val lang: String? = null,
-    val language: String? = null,
-    val label: String? = null
-) {
-    fun getResolvedUrl(): String {
-        return url ?: link ?: ""
-    }
-
-    fun getResolvedLanguageCode(): String {
-        return lang ?: language ?: "en"
-    }
-
-    fun getResolvedLabel(): String {
-        return label ?: getResolvedLanguageCode().uppercase()
-    }
-}
-
-@JsonClass(generateAdapter = true)
-data class MovieBoxPlayResponse(
-    val code: Int? = null,      // 0 = success; anything else = API-level error
-    val message: String? = null, // "ok" on success
-    val data: MovieBoxPlayData? = null
-)
-
-@JsonClass(generateAdapter = true)
-data class MovieBoxPlayData(
-    val streams: List<ResolveStreamItem>? = null,
-    val captions: List<ResolveCaptionItem>? = null
+data class StreamItem(
+    val url: String,
+    val quality: String?,
+    val type: String?,
+    val provider: String?
 )
 
 

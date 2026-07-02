@@ -7,6 +7,7 @@ import com.example.data.local.WatchHistoryItem
 import com.example.data.local.WatchlistItem
 import com.example.data.model.*
 import com.example.data.repository.MovieRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -18,7 +19,7 @@ sealed interface DetailsUiState {
 
 sealed interface StaffUiState {
     object Loading : StaffUiState
-    data class Success(val staff: StaffDetails) : StaffUiState
+    data class Success(val data: StaffPageData) : StaffUiState
     data class Error(val message: String) : StaffUiState
 }
 
@@ -30,6 +31,7 @@ sealed interface PlaybackUiState {
 }
 
 class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() {
+    private var playbackJob: kotlinx.coroutines.Job? = null
 
     // Bottom Navigation Tab System
     private val _currentTab = MutableStateFlow(0)
@@ -93,27 +95,31 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
     val moviesList: StateFlow<List<MediaSummary>> = _moviesList.asStateFlow()
 
 
-    // TV Show filter selections
-    private val _tvSelectedGenre = MutableStateFlow("All")
-    val tvSelectedGenre: StateFlow<String> = _tvSelectedGenre.asStateFlow()
+    // Explore filter selections (formerly "TV Shows")
+    private val _exploreSelectedGenre = MutableStateFlow("All")
+    val exploreSelectedGenre: StateFlow<String> = _exploreSelectedGenre.asStateFlow()
 
-    private val _tvSelectedCountry = MutableStateFlow("All")
-    val tvSelectedCountry: StateFlow<String> = _tvSelectedCountry.asStateFlow()
+    private val _exploreSelectedCountry = MutableStateFlow("All")
+    val exploreSelectedCountry: StateFlow<String> = _exploreSelectedCountry.asStateFlow()
 
-    private val _tvSelectedYear = MutableStateFlow("All")
-    val tvSelectedYear: StateFlow<String> = _tvSelectedYear.asStateFlow()
+    private val _exploreSelectedYear = MutableStateFlow("All")
+    val exploreSelectedYear: StateFlow<String> = _exploreSelectedYear.asStateFlow()
 
-    private val _tvSelectedLanguage = MutableStateFlow("All")
-    val tvSelectedLanguage: StateFlow<String> = _tvSelectedLanguage.asStateFlow()
+    private val _isExploreLoading = MutableStateFlow(false)
+    val isExploreLoading: StateFlow<Boolean> = _isExploreLoading.asStateFlow()
 
-    private val _tvSelectedSortBy = MutableStateFlow("Popularity")
-    val tvSelectedSortBy: StateFlow<String> = _tvSelectedSortBy.asStateFlow()
+    private val _isExploreLoadingMore = MutableStateFlow(false)
+    val isExploreLoadingMore: StateFlow<Boolean> = _isExploreLoadingMore.asStateFlow()
 
-    private val _isTvLoading = MutableStateFlow(false)
-    val isTvLoading: StateFlow<Boolean> = _isTvLoading.asStateFlow()
+    private val _exploreHasMore = MutableStateFlow(false)
+    val exploreHasMore: StateFlow<Boolean> = _exploreHasMore.asStateFlow()
 
-    private val _tvList = MutableStateFlow<List<MediaSummary>>(emptyList())
-    val tvList: StateFlow<List<MediaSummary>> = _tvList.asStateFlow()
+    private val _exploreList = MutableStateFlow<List<MediaSummary>>(emptyList())
+    val exploreList: StateFlow<List<MediaSummary>> = _exploreList.asStateFlow()
+
+    // Explore pagination bookkeeping
+    private var explorePage: Int = 1
+    private var exploreJob: Job? = null
 
 
     // Anime / Animation filter selections
@@ -135,7 +141,7 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
 
     // Legacy support
     val moviesFilterGenre: StateFlow<String> = _movieSelectedGenre
-    val tvFilterGenre: StateFlow<String> = _tvSelectedGenre
+    val tvFilterGenre: StateFlow<String> = _exploreSelectedGenre
 
 
     fun applyMovieFilters(genre: String, country: String, year: String, language: String, sortBy: String) {
@@ -168,34 +174,53 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
         applyMovieFilters("All", "All", "All", "All", "Popularity")
     }
 
-    fun applyTvFilters(genre: String, country: String, year: String, language: String, sortBy: String) {
-        _tvSelectedGenre.value = genre
-        _tvSelectedCountry.value = country
-        _tvSelectedYear.value = year
-        _tvSelectedLanguage.value = language
-        _tvSelectedSortBy.value = sortBy
+    fun applyExploreFilters(genre: String, country: String, year: String) {
+        _exploreSelectedGenre.value = genre
+        _exploreSelectedCountry.value = country
+        _exploreSelectedYear.value = year
 
-        viewModelScope.launch {
-            _isTvLoading.value = true
+        exploreJob?.cancel()
+        exploreJob = viewModelScope.launch {
+            _isExploreLoading.value = true
+            explorePage = 1
             try {
-                _tvList.value = repository.getFilteredSubjects(
-                    type = 2,
-                    genre = genre,
-                    country = country,
-                    year = year,
-                    language = language,
-                    sortBy = sortBy
-                )
+                val page = repository.getExploreSubjects(genre, country, year, 1)
+                _exploreList.value = page.items
+                _exploreHasMore.value = page.hasMore
+                explorePage = page.nextPage
             } catch (e: Exception) {
-                _tvList.value = emptyList()
+                _exploreList.value = emptyList()
+                _exploreHasMore.value = false
             } finally {
-                _isTvLoading.value = false
+                _isExploreLoading.value = false
             }
         }
     }
 
-    fun resetTvFilters() {
-        applyTvFilters("All", "All", "All", "All", "Popularity")
+    fun loadMoreExplore() {
+        if (_isExploreLoading.value || _isExploreLoadingMore.value || !_exploreHasMore.value) return
+        viewModelScope.launch {
+            _isExploreLoadingMore.value = true
+            try {
+                val page = repository.getExploreSubjects(
+                    _exploreSelectedGenre.value,
+                    _exploreSelectedCountry.value,
+                    _exploreSelectedYear.value,
+                    explorePage
+                )
+                _exploreList.value = _exploreList.value + page.items
+                _exploreHasMore.value = page.hasMore
+                explorePage = page.nextPage
+            } catch (e: Exception) {
+                _exploreHasMore.value = false
+            } finally {
+                _isExploreLoadingMore.value = false
+            }
+        }
+    }
+
+    fun resetExploreFilters() {
+        applyExploreFilters("All", "All", "All")
     }
 
     fun applyAnimeFilters(country: String, year: String, sortBy: String) {
@@ -230,8 +255,9 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
         applyMovieFilters(genre, _movieSelectedCountry.value, _movieSelectedYear.value, _movieSelectedLanguage.value, _movieSelectedSortBy.value)
     }
 
+    // Backward-compatible entry point used by the Home screen quick-filters.
     fun setTvFilter(genre: String) {
-        applyTvFilters(genre, _tvSelectedCountry.value, _tvSelectedYear.value, _tvSelectedLanguage.value, _tvSelectedSortBy.value)
+        applyExploreFilters(genre, _exploreSelectedCountry.value, _exploreSelectedYear.value)
     }
 
     // Room Persistent states (Zustand storage equivalent)
@@ -252,9 +278,26 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
     private val _staffUiState = MutableStateFlow<StaffUiState>(StaffUiState.Loading)
     val staffUiState: StateFlow<StaffUiState> = _staffUiState.asStateFlow()
 
+    // Staff filmography pagination bookkeeping
+    private var staffId: String = ""
+    private var staffPage: Int = 1
+    private var staffHasMore: Boolean = false
+    private var staffLoadingMore: Boolean = false
+    private val STAFF_PER_PAGE = 18
+
     // Player screen states
     private val _playbackUiState = MutableStateFlow<PlaybackUiState>(PlaybackUiState.Idle)
     val playbackUiState: StateFlow<PlaybackUiState> = _playbackUiState.asStateFlow()
+
+    // Playback position (ms) to restore after a seamless audio-language switch. Set by
+    // switchAudioLanguage() and consumed once by the player when the new stream is prepared.
+    private var pendingResumePositionMs: Long = 0L
+
+    fun consumePendingResumePosition(): Long {
+        val p = pendingResumePositionMs
+        pendingResumePositionMs = 0L
+        return p
+    }
 
     // Search screen states
     private val _searchQuery = MutableStateFlow("")
@@ -275,11 +318,19 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
     private val _trendingSearches = MutableStateFlow<List<String>>(emptyList())
     val trendingSearches: StateFlow<List<String>> = _trendingSearches.asStateFlow()
 
+    // Full-search bookkeeping.
+    // searchJob: lets a newer full search cancel an older in-flight one (no stale overwrites).
+    // lastCommittedQuery: the query the user "committed" via performFullSearch. While a query is
+    // committed, the debounced suggestion pipeline must NOT repopulate suggestions for it —
+    // otherwise the suggestion dropdown would reappear ~300ms later and hide the results grid.
+    private var searchJob: Job? = null
+    private var lastCommittedQuery: String? = null
+
     init {
         loadHomeData()
         loadBanner()
         applyMovieFilters("All", "All", "All", "All", "Popularity")
-        applyTvFilters("All", "All", "All", "All", "Popularity")
+        applyExploreFilters("All", "All", "All")
         applyAnimeFilters("All", "All", "Popularity")
         initSearchDebounce()
         loadTrendingSearches()
@@ -301,6 +352,7 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
             try {
                 val banners = repository.getBannerItems()
                 _bannerItems.value = banners
+                android.util.Log.d("HOME_DEBUG", "banner count = ${_bannerItems.value.size}")
             } catch (e: Exception) {
                 android.util.Log.e("HOME_API", "Error in loadBanner", e)
             }
@@ -308,11 +360,13 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
     }
 
     fun loadHomeData() {
+        android.util.Log.d("HOME_DEBUG", "loadHomeData called")
         viewModelScope.launch {
             _isHomeLoading.value = true
             try {
                 // 1. Fetch remote sections dynamically
                 val sections = repository.getHomeSections()
+                android.util.Log.d("HOME_DEBUG", "sections count = ${sections.size}")
                 _homeSections.value = sections
 
                 // 2. Populate fallback/legacy states so secondary screens do not break
@@ -368,6 +422,11 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
 
     fun search(query: String) {
         _searchQuery.value = query
+        // The user is editing the text again → this is no longer a committed full-search query,
+        // so live suggestions should resume for the new text.
+        if (query.trim() != lastCommittedQuery) {
+            lastCommittedQuery = null
+        }
         if (query.isBlank()) {
             _searchResults.value = emptyList()
             _searchSuggestions.value = emptyList()
@@ -383,6 +442,10 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
                 .distinctUntilChanged()
                 .collect { query ->
                     val trimmed = query.trim()
+                    // Skip the suggestion fetch entirely for a query that was committed to a full
+                    // search — its results are already on screen and must stay visible.
+                    if (trimmed == lastCommittedQuery) return@collect
+
                     if (trimmed.length >= 2) {
                         try {
                             val encodedQuery = java.net.URLEncoder.encode(trimmed, "UTF-8")
@@ -393,7 +456,12 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
                             val items = response.data?.items ?: emptyList()
 
                             android.util.Log.d("SEARCH_SUGGESTIONS_COUNT", "Count: ${items.size}")
-                            _searchSuggestions.value = items
+                            // Re-check after awaiting: if the query was committed to a full search
+                            // (or changed) while this request was in flight, drop these suggestions
+                            // so they can't overwrite the visible results.
+                            if (trimmed != lastCommittedQuery && _searchQuery.value.trim() == trimmed) {
+                                _searchSuggestions.value = items
+                            }
                         } catch (e: Exception) {
                             android.util.Log.e("SEARCH_ERROR", "Error fetching suggestions", e)
                             _searchSuggestions.value = emptyList()
@@ -408,12 +476,18 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
     fun performFullSearch(query: String) {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return
+        // Mark this query as committed BEFORE touching _searchQuery so the debounced suggestion
+        // pipeline (which observes _searchQuery) won't re-fetch suggestions and hide the results.
+        lastCommittedQuery = trimmed
         _searchQuery.value = trimmed
         _searchSuggestions.value = emptyList() // clear suggestions list on enter
         _isSearching.value = true
         _searchError.value = null
 
-        viewModelScope.launch {
+        // Cancel any previous in-flight full search so an older response can't overwrite this one.
+        // Previous results are left untouched until the new ones arrive (no premature clearing).
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
             try {
                 val encodedQuery = java.net.URLEncoder.encode(trimmed, "UTF-8")
                 android.util.Log.d("SEARCH_QUERY", "Performing full search for: $trimmed")
@@ -455,39 +529,155 @@ class CineVerseViewModel(private val repository: MovieRepository) : ViewModel() 
         viewModelScope.launch {
             _staffUiState.value = StaffUiState.Loading
             try {
-                val staff = repository.getStaffDetails(id)
-                _staffUiState.value = StaffUiState.Success(staff)
+                staffId = id
+                staffPage = 1
+                staffLoadingMore = false
+                val page = repository.getStaffFilmographyPage(id, 1, STAFF_PER_PAGE)
+                val related = repository.getStaffRelatedCelebrities(id)
+                staffHasMore = page.hasMore
+                val profile = page.profile
+                    ?: StaffProfileInfo(id, "", "", "", "", page.totalTitles)
+                _staffUiState.value = StaffUiState.Success(
+                    StaffPageData(
+                        profile = profile,
+                        filmography = page.items,
+                        related = related,
+                        totalTitles = page.totalTitles,
+                        hasMore = page.hasMore,
+                        isLoadingMore = false,
+                        currentPage = 1
+                    )
+                )
             } catch (e: Exception) {
                 _staffUiState.value = StaffUiState.Error(e.message ?: "Failed to load staff.")
             }
         }
     }
 
-    fun loadPlayback(mediaId: String, episodeId: String? = null) {
+    fun loadMoreStaffFilmography() {
+        val current = _staffUiState.value as? StaffUiState.Success ?: return
+        if (!staffHasMore || staffLoadingMore) return
+        staffLoadingMore = true
+        _staffUiState.value = StaffUiState.Success(current.data.copy(isLoadingMore = true))
         viewModelScope.launch {
+            try {
+                val next = staffPage + 1
+                val page = repository.getStaffFilmographyPage(staffId, next, STAFF_PER_PAGE)
+                staffPage = next
+                staffHasMore = page.hasMore && page.items.isNotEmpty()
+                val merged = current.data.filmography + page.items
+                _staffUiState.value = StaffUiState.Success(
+                    current.data.copy(
+                        filmography = merged,
+                        hasMore = staffHasMore,
+                        isLoadingMore = false,
+                        currentPage = next
+                    )
+                )
+            } catch (e: Exception) {
+                staffHasMore = false
+                _staffUiState.value = StaffUiState.Success(
+                    current.data.copy(isLoadingMore = false, hasMore = false)
+                )
+            } finally {
+                staffLoadingMore = false
+            }
+        }
+    }
+
+    fun loadPlayback(mediaId: String, episodeId: String? = null) {
+        playbackJob?.cancel()
+        playbackJob = viewModelScope.launch {
             _playbackUiState.value = PlaybackUiState.Loading
             try {
-                android.util.Log.d("STREAM_REQUEST", "STREAM_REQUEST subjectId=$mediaId, episodeId=$episodeId")
+                android.util.Log.d("PLAYBACK_FLOW", "=== PLAYBACK FLOW STARTED ===")
+                android.util.Log.d("PLAYBACK_FLOW", "SubjectId: $mediaId")
+                android.util.Log.d("PLAYBACK_FLOW", "EpisodeId: $episodeId")
+                
                 val playback = repository.getPlaybackDetails(mediaId, episodeId)
-                android.util.Log.d("STREAM_RESPONSE", "STREAM_RESPONSE Stream URL determined: ${playback.streamUrl}")
-                android.util.Log.d("SELECTED_STREAM", "SELECTED_STREAM Selected stream: ${playback.streamUrl}")
+                
+                android.util.Log.d("PLAYBACK_FLOW", "=== PLAYBACK RESOLVED ===")
+                android.util.Log.d("PLAYBACK_FLOW", "Stream URL: ${playback.streamUrl}")
+                android.util.Log.d("PLAYBACK_FLOW", "Format: ${playback.format}")
+                android.util.Log.d("PLAYBACK_FLOW", "Qualities available: ${playback.qualities.size}")
+                // FLOW_TRACE LOG 6 — ViewModel hand-off to the Player screen
+                android.util.Log.e("FLOW_TRACE", "ViewModel received URL = ${playback.streamUrl}")
 
                 val details = repository.getDetails(mediaId)
-                android.util.Log.d("DETAIL_API_RESPONSE", "DETAIL_API_RESPONSE Title: ${details.title}, Seasons: ${details.seasons.size}")
+                android.util.Log.d("PLAYBACK_FLOW", "Details fetched: ${details.title}")
 
                 val recommendations = try {
                     val recs = repository.getRecommendations(mediaId)
-                    android.util.Log.d("RECOMMENDATION_COUNT", "RECOMMENDATION_COUNT quantity: ${recs.size}")
+                    android.util.Log.d("PLAYBACK_FLOW", "Recommendations: ${recs.size}")
                     recs
                 } catch (e: Exception) {
-                    android.util.Log.e("RECOMMENDATION", "Failed to fetch recommendations", e)
+                    android.util.Log.e("PLAYBACK_FLOW", "Failed to fetch recommendations: ${e.message}")
                     emptyList()
                 }
 
                 _playbackUiState.value = PlaybackUiState.Success(playback, details, recommendations)
+                android.util.Log.d("PLAYBACK_FLOW", "=== PLAYBACK READY FOR PLAYER ===")
             } catch (e: Exception) {
-                _playbackUiState.value = PlaybackUiState.Error(e.message ?: "Failed to load playback stream.")
+                android.util.Log.e("PLAYBACK_FLOW", "=== PLAYBACK FAILED ===")
+                android.util.Log.e("PLAYBACK_FLOW", "Error: ${e.javaClass.simpleName}")
+                android.util.Log.e("PLAYBACK_FLOW", "Message: ${e.message}")
+                
+                // Determine user-friendly error message
+                val userMessage = when {
+                    e.message?.contains("CLEARTEXT", ignoreCase = true) == true -> {
+                        android.util.Log.e("PLAYBACK_FLOW", "ERROR TYPE: Network Security Policy")
+                        android.util.Log.e("PLAYBACK_FLOW", "Android is blocking HTTP (cleartext) traffic")
+                        android.util.Log.e("PLAYBACK_FLOW", "Check: network_security_config.xml")
+                        "Network security policy blocking HTTP. Check backend URL configuration."
+                    }
+                    e.message?.contains("Connection", ignoreCase = true) == true -> {
+                        android.util.Log.e("PLAYBACK_FLOW", "ERROR TYPE: Connection Error")
+                        "Cannot connect to backend server. Is it running?"
+                    }
+                    e.message?.contains("unreachable", ignoreCase = true) == true -> {
+                        android.util.Log.e("PLAYBACK_FLOW", "ERROR TYPE: Server Unreachable")
+                        "Playback server unreachable. Check network connection and backend URL."
+                    }
+                    e.message?.contains("Certificate", ignoreCase = true) == true -> {
+                        android.util.Log.e("PLAYBACK_FLOW", "ERROR TYPE: Certificate Error")
+                        "SSL certificate validation failed. Check backend HTTPS configuration."
+                    }
+                    e.message?.contains("timeout", ignoreCase = true) == true -> {
+                        android.util.Log.e("PLAYBACK_FLOW", "ERROR TYPE: Timeout")
+                        "Backend server is taking too long to respond."
+                    }
+                    else -> e.message ?: "Failed to load playback stream."
+                }
+                
+                _playbackUiState.value = PlaybackUiState.Error(userMessage)
             }
+        }
+    }
+
+    /**
+     * Seamless audio-language (dub) switch from the player. Fetches the selected dub's detail,
+     * maps the currently-watched episode onto the new subject (special rule: movies drop season
+     * logic; TV keeps the same season/episode, falling back to the first episode when the new
+     * language lacks it), remembers the current playback position, then reuses the untouched
+     * [loadPlayback] pipeline to reload the stream for the new subjectId. The player restores the
+     * position via [consumePendingResumePosition] once the new stream is prepared.
+     */
+    fun switchAudioLanguage(newSubjectId: String, desiredEpisodeId: String?, positionMs: Long) {
+        viewModelScope.launch {
+            _playbackUiState.value = PlaybackUiState.Loading
+            val targetEpisodeId = try {
+                val newDetails = repository.getDetails(newSubjectId)
+                when {
+                    newDetails.mediaType.equals("movie", ignoreCase = true) -> null
+                    desiredEpisodeId != null && newDetails.episodes.any { it.id == desiredEpisodeId } -> desiredEpisodeId
+                    else -> newDetails.episodes.firstOrNull()?.id
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DUB_SWITCH", "Failed to map episode for $newSubjectId: ${e.message}")
+                desiredEpisodeId
+            }
+            pendingResumePositionMs = positionMs.coerceAtLeast(0L)
+            loadPlayback(newSubjectId, targetEpisodeId)
         }
     }
 

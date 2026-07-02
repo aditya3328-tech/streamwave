@@ -1,5 +1,6 @@
 package com.example.data.model
 
+import androidx.compose.runtime.Immutable
 import com.squareup.moshi.Json
 
 data class HomeResponse(
@@ -18,6 +19,7 @@ data class PlatformItem(
     val uploadBy: String?
 )
 
+@Immutable
 data class HomeSection(
     val type: String, // "BANNER", "FILTER", "SPORT_LIVE", "SUBJECTS_MOVIE", "CUSTOM", "APPOINTMENT_LIST"
     val position: Int,
@@ -35,10 +37,12 @@ data class HomeSection(
 
 typealias Banner = BannerData
 
+@Immutable
 data class BannerData(
     val items: List<BannerItem> = emptyList()
 )
 
+@Immutable
 data class BannerItem(
     val id: String,
     val title: String,
@@ -50,12 +54,14 @@ data class BannerItem(
     val detailPath: String?
 )
 
+@Immutable
 data class CustomData(
     val rowCount: Int?,
     val items: List<BannerItem> = emptyList(),
     val hiddenTitle: Boolean?
 )
 
+@Immutable
 data class FilterItem(
     val title: String,
     val url: String?,
@@ -63,6 +69,7 @@ data class FilterItem(
     val image: BannerImage?
 )
 
+@Immutable
 data class LiveMatch(
     val matchId: String,
     val team1: Team?,
@@ -74,6 +81,7 @@ data class LiveMatch(
     val image: BannerImage?
 )
 
+@Immutable
 data class Team(
     val id: String,
     val name: String,
@@ -87,6 +95,7 @@ data class Team(
     val isVirtual: Boolean?
 )
 
+@Immutable
 data class Subject(
     val subjectId: String,
     val subjectType: Int, // 1 = Movie, 2 = TV Show, 5 = Course, 7 = Short TV, 9 = Sport Replay
@@ -110,11 +119,14 @@ data class Subject(
     val stills: BannerImage?,
     val postTitle: String?,
     val season: Int?,
-    val dubs: List<String> = emptyList()
+    val dubs: List<String> = emptyList(),
+    @Transient val staffList: Any? = null,
+    @Transient val seasonInfo: Any? = null
 )
 
 typealias ImageObject = BannerImage
 
+@Immutable
 data class BannerImage(
     val url: String,
     val width: Int?,

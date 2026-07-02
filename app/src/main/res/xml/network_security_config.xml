@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Network Security Configuration for CineVerse Android App
+
+    The app talks DIRECTLY to upstream HTTPS APIs only — there is no custom backend,
+    no localhost, and no LAN (192.168.x.x) server. All traffic is HTTPS:
+      - h5-api.aoneroom.com   (stream resolution: /subject/play, /subject/caption, details, search)
+      - movie-box.co          (Referer origin used for CDN auth)
+      - *.hakunaymatata.com   (signed media CDN — served over HTTPS)
+
+    Cleartext (HTTP) is therefore disabled everywhere; only the system CA trust store is used.
+-->
+
+<network-security-config>
+    <!-- Disable cleartext globally — every endpoint the app uses is HTTPS. -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

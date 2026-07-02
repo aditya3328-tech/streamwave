@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
@@ -184,14 +186,12 @@ fun DetailsScreen(
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 } else {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(details.posterPath.ifBlank { details.backdropPath })
-                                            .crossfade(true)
-                                            .build(),
+                                    OptimizedPosterImage(
+                                        data = details.posterPath.ifBlank { details.backdropPath },
                                         contentDescription = details.title,
                                         modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
+                                        widthPx = 1280,
+                                        heightPx = 720
                                     )
                                 }
 
@@ -331,25 +331,26 @@ fun DetailsScreen(
                                             },
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .height(48.dp)
+                                                .height(52.dp)
                                                 .testTag("detail_play_button"),
                                             colors = ButtonDefaults.buttonColors(
-                                                containerColor = NETFLIX_RED,
+                                                containerColor = CRUNCHY_ORANGE,
                                                 contentColor = Color.White
                                             ),
-                                            shape = RoundedCornerShape(8.dp)
+                                            shape = RoundedCornerShape(10.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.PlayArrow,
                                                 contentDescription = null,
-                                                tint = Color.White
+                                                tint = Color.White,
+                                                modifier = Modifier.size(24.dp)
                                             )
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
-                                                text = "Play Now",
+                                                text = "Watch Now",
                                                 color = Color.White,
                                                 fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp
+                                                fontSize = 15.sp
                                             )
                                         }
 
@@ -363,7 +364,7 @@ fun DetailsScreen(
                                             enabled = !trailerUrl.isNullOrEmpty(),
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .height(48.dp)
+                                                .height(52.dp)
                                                 .testTag("detail_trailer_button"),
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = Color.White.copy(alpha = 0.15f),
@@ -371,7 +372,7 @@ fun DetailsScreen(
                                                 disabledContainerColor = Color.White.copy(alpha = 0.05f),
                                                 disabledContentColor = Color.Gray
                                             ),
-                                            shape = RoundedCornerShape(8.dp)
+                                            shape = RoundedCornerShape(10.dp)
                                         ) {
                                             Icon(
                                                 imageVector = Icons.Default.PlayArrow,
@@ -505,12 +506,14 @@ fun DetailsScreen(
                         }
                     }
 
-                    // 6. Dub Languages Horizontal Card Row
+                    // 6. Languages (Dubs) — MovieBox-style chips. Selecting a language reloads the
+                    // whole detail screen in place (title/desc/seasons/episodes/cast/recs/streams)
+                    // for the dub's subjectId. No navigation push/pop.
                     if (details.dubs.isNotEmpty()) {
                         item {
                             Spacer(modifier = Modifier.height(20.dp))
                             Text(
-                                text = "Audio & Languages",
+                                text = "Languages",
                                 color = Color.White,
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
@@ -519,55 +522,39 @@ fun DetailsScreen(
                             LazyRow(
                                 modifier = Modifier.fillMaxWidth(),
                                 contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                items(details.dubs) { dub ->
-                                    Box(
+                                items(details.dubs, key = { it.subjectId }) { dub ->
+                                    val isSelected = dub.subjectId == details.id
+                                    Row(
                                         modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .background(if (dub.original == true) CRUNCHY_ORANGE.copy(alpha = 0.15f) else Color.White.copy(alpha = 0.05f))
-                                            .border(
-                                                width = 1.dp,
-                                                color = if (dub.original == true) CRUNCHY_ORANGE else Color.White.copy(alpha = 0.1f),
-                                                shape = RoundedCornerShape(8.dp)
-                                            )
+                                            .height(40.dp)
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(if (isSelected) CRUNCHY_ORANGE else DEEP_GREY)
                                             .clickable {
-                                                if (dub.subjectId != details.id) {
-                                                    onNavigateToDetails(dub.subjectId)
+                                                if (!isSelected) {
+                                                    viewModel.loadMediaDetails(dub.subjectId)
                                                 }
                                             }
-                                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                                            .padding(horizontal = 16.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(if (dub.original == true) CRUNCHY_ORANGE else Color.Gray)
-                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
-                                            ) {
-                                                Text(
-                                                    text = dub.lanCode?.uppercase() ?: "AUDIO",
-                                                    color = Color.Black,
-                                                    fontSize = 8.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(
-                                                text = dub.lanName ?: "Unknown Dub",
-                                                color = Color.White,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Medium
+                                        Text(
+                                            text = dub.lanName ?: "Unknown",
+                                            color = if (isSelected) Color.White else Color.LightGray,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Selected language",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(16.dp)
                                             )
-                                            if (dub.original == true) {
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(
-                                                    text = "(Orig)",
-                                                    color = CRUNCHY_ORANGE,
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
                                         }
                                     }
                                 }
@@ -591,24 +578,22 @@ fun DetailsScreen(
                                 contentPadding = PaddingValues(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
-                                items(details.stars) { star ->
+                                itemsIndexed(details.stars, key = { index, star -> "${star.staffId}_$index" }) { _, star ->
                                     Column(
                                         modifier = Modifier
                                             .width(76.dp)
                                             .clickable { onNavigateToStaff(star.staffId) },
                                         horizontalAlignment = Alignment.CenterHorizontally
                                     ) {
-                                        AsyncImage(
-                                            model = ImageRequest.Builder(LocalContext.current)
-                                                .data(star.avatarUrl)
-                                                .crossfade(true)
-                                                .build(),
+                                        OptimizedPosterImage(
+                                            data = star.avatarUrl,
                                             contentDescription = star.name,
                                             modifier = Modifier
                                                 .size(60.dp)
                                                 .clip(CircleShape)
                                                 .background(DEEP_GREY),
-                                            contentScale = ContentScale.Crop
+                                            widthPx = 150,
+                                            heightPx = 150
                                         )
                                         Spacer(modifier = Modifier.height(6.dp))
                                         Text(
@@ -715,7 +700,7 @@ fun DetailsScreen(
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                             )
                         }
-                        items(details.comments) { comment ->
+                        items(details.comments, key = { it.postId }) { comment ->
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -729,17 +714,15 @@ fun DetailsScreen(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
-                                    AsyncImage(
-                                        model = ImageRequest.Builder(LocalContext.current)
-                                            .data(comment.user?.avatar)
-                                            .crossfade(true)
-                                            .build(),
+                                    OptimizedPosterImage(
+                                        data = comment.user?.avatar,
                                         contentDescription = comment.user?.nickname ?: "User",
                                         modifier = Modifier
                                             .size(28.dp)
                                             .clip(CircleShape)
                                             .background(DEEP_GREY),
-                                        contentScale = ContentScale.Crop
+                                        widthPx = 56,
+                                        heightPx = 56
                                     )
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Column {

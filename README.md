@@ -1,7 +1,7 @@
 # 🎬 StreamWave — Native Android Movie App
 
 <p align="center">
-  <img src="app/src/main/streamwavelogo.png" alt="StreamWave Logo" width="120"/>
+  <img src="https://res.cloudinary.com/dtz0urit6/image/upload/q_auto:best,f_jpg/cloudinary-tools-uploads/nny6cwh3qlhhutvsauqy" alt="StreamWave Logo" width="120"/>
 </p>
 
 <h3 align="center">Discover Movies. Explore Entertainment. Enjoy the Experience.</h3>
